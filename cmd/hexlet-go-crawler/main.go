@@ -1,0 +1,118 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"os"
+	"time"
+
+	"code/crawler"
+
+	"github.com/urfave/cli/v3"
+)
+
+// Пример справки утилиты:
+
+// bin/hexlet-go-crawler --help
+// NAME:
+//    hexlet-go-crawler - analyze a website structure
+
+// USAGE:
+//    hexlet-go-crawler [global options] command [command options] <url>
+
+// COMMANDS:
+//    help, h  Shows a list of commands or help for one command
+
+// GLOBAL OPTIONS:
+//    --depth value       crawl depth (default: 10)
+//    --retries value     number of retries for failed requests (default: 1)
+//    --delay value       delay between requests (example: 200ms, 1s) (default: 0s)
+//    --timeout value     per-request timeout (default: 15s)
+//    --rps value         limit requests per second (overrides delay) (default: 0)
+//    --user-agent value  custom user agent
+//    --workers value     number of concurrent workers (default: 4)
+//    --help, -h          show help
+
+func main() {
+	cmd := &cli.Command{
+		Name:      "hexlet-go-crawler",
+		Usage:     "analyze a website structure",
+		ArgsUsage: "<url>",
+		Flags: []cli.Flag{
+			&cli.IntFlag{
+				Name:  "depth",
+				Usage: "crawl depth",
+				Value: 10,
+			},
+			&cli.IntFlag{
+				Name:  "retries",
+				Usage: "number of retries for failed requests",
+				Value: 1,
+			},
+			&cli.DurationFlag{
+				Name:  "delay",
+				Usage: "delay between requests (example: 200ms, 1s)",
+				Value: 0,
+			},
+			&cli.DurationFlag{
+				Name:  "timeout",
+				Usage: "per-request timeout",
+				Value: 15 * time.Second,
+			},
+
+			// ???: этого флага я не вижу в примере Options, он есть пока только в примере Справки
+			// ???: возможно, появится позже ...
+			&cli.IntFlag{
+				Name:  "rps",
+				Usage: "limit requests per second (overrides delay)",
+				Value: 0,
+			},
+
+			&cli.StringFlag{
+				Name:  "user-agent",
+				Usage: "custom user agent",
+			},
+			&cli.IntFlag{
+				Name:  "workers",
+				Usage: "number of concurrent workers",
+				Value: 4,
+			},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			url := cmd.Args().First()
+			if url == "" {
+				fmt.Fprintln(os.Stdout, "URL is required")
+				fmt.Fprintln(os.Stdout)
+
+				return cli.ShowAppHelp(cmd)
+			}
+
+			timeout := cmd.Duration("timeout")
+
+			result, err := crawler.Analyze(ctx, crawler.Options{
+				URL:         url,
+				Depth:       cmd.Int("depth"),
+				Retries:     cmd.Int("retries"),
+				Delay:       cmd.Duration("delay"),
+				Timeout:     timeout,
+				UserAgent:   cmd.String("user-agent"),
+				Concurrency: cmd.Int("workers"),
+				IndentJSON:  true,
+				HTTPClient: &http.Client{
+					Timeout: timeout,
+				},
+			})
+			if len(result) > 0 {
+				fmt.Fprintln(os.Stdout, string(result))
+			}
+
+			return err
+		},
+	}
+
+	if err := cmd.Run(context.Background(), os.Args); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
