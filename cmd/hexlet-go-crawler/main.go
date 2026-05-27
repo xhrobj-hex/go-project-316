@@ -82,8 +82,12 @@ func main() {
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			url := cmd.Args().First()
 			if url == "" {
-				fmt.Fprintln(os.Stdout, "URL is required")
-				fmt.Fprintln(os.Stdout)
+				if _, err := fmt.Fprintln(os.Stdout, "URL is required"); err != nil {
+					return err
+				}
+				if _, err := fmt.Fprintln(os.Stdout); err != nil {
+					return err
+				}
 
 				return cli.ShowAppHelp(cmd)
 			}
@@ -104,7 +108,9 @@ func main() {
 				},
 			})
 			if len(result) > 0 {
-				fmt.Fprintln(os.Stdout, string(result))
+				if _, err := fmt.Fprintln(os.Stdout, string(result)); err != nil {
+					return err
+				}
 			}
 
 			return err
@@ -112,7 +118,10 @@ func main() {
 	}
 
 	if err := cmd.Run(context.Background(), os.Args); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		if _, printErr := fmt.Fprintln(os.Stderr, err); printErr != nil {
+			os.Exit(1)
+		}
+
 		os.Exit(1)
 	}
 }

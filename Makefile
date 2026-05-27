@@ -1,4 +1,4 @@
-.PHONY: build test run
+.PHONY: build test lint run
 
 build:
 	mkdir -p bin
@@ -6,6 +6,9 @@ build:
 
 test:
 	go test ./...
+
+lint:
+	golangci-lint run
 
 run:
 ifndef URL
