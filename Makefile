@@ -1,4 +1,4 @@
-.PHONY: build test lint run
+.PHONY: build test lint run clean
 
 build:
 	mkdir -p bin
@@ -16,3 +16,6 @@ ifndef URL
 else
 	go run ./cmd/hexlet-go-crawler $(URL)
 endif
+
+clean:
+	rm -f ./bin/hexlet-go-crawler
