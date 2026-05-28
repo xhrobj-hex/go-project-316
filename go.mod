@@ -2,4 +2,7 @@ module code
 
 go 1.26.1
 
-require github.com/urfave/cli/v3 v3.9.0
+require (
+	github.com/urfave/cli/v3 v3.9.0
+	golang.org/x/net v0.55.0
+)

@@ -318,3 +318,157 @@ func TestAnalyze_TimeoutReturnsErrorReport(t *testing.T) {
 		}
 	}
 }
+
+func TestAnalyze_ReportsBrokenLinksFromHTMLPage(t *testing.T) {
+	htmlBody := `
+		<!doctype html>
+		<html>
+			<head>
+				<link rel="stylesheet" href="/assets/app.css">
+				<link rel="stylesheet" href="/assets/ghost.css">
+			</head>
+			<body>
+				<a href="/blog/post.html">working link</a>
+				<img src="/images/missing.png">
+				<a href="">empty link</a>
+				<a href="#content">anchor link</a>
+				<a href="mailto:team@example.com">email link</a>
+				<a href="javascript:void(0)">javascript link</a>
+			</body>
+		</html>
+	`
+
+	client := &http.Client{
+		Transport: roundTripFunc(func(rq *http.Request) (*http.Response, error) {
+			switch rq.URL.String() {
+			case "http://simple.test/blog/index.html":
+				return newTestResponse(rq, http.StatusOK, "200 OK", htmlBody), nil
+			case "http://simple.test/assets/app.css":
+				return newTestResponse(rq, http.StatusOK, "200 OK", "ok"), nil
+			case "http://simple.test/blog/post.html":
+				return newTestResponse(rq, http.StatusOK, "200 OK", "ok"), nil
+			case "http://simple.test/assets/ghost.css":
+				return newTestResponse(rq, http.StatusNotFound, "404 Not Found", "not found"), nil
+			case "http://simple.test/images/missing.png":
+				return nil, errors.New("network is down")
+			default:
+				t.Fatalf("got unexpected request URL %q", rq.URL.String())
+				return nil, nil
+			}
+		}),
+	}
+
+	result, err := Analyze(context.Background(), Options{
+		URL:        "http://simple.test/blog/index.html",
+		Depth:      2,
+		HTTPClient: client,
+	})
+	if err != nil {
+		t.Fatalf("got error %v, want nil", err)
+	}
+
+	var report Report
+	if err := json.Unmarshal(result, &report); err != nil {
+		t.Fatalf("got unmarshal error %v, want nil", err)
+	}
+
+	{
+		got := len(report.Pages)
+		want := 1
+		if got != want {
+			t.Fatalf("got pages len %d, want %d", got, want)
+		}
+	}
+
+	page := report.Pages[0]
+
+	{
+		got := page.URL
+		want := "http://simple.test/blog/index.html"
+		if got != want {
+			t.Fatalf("got page URL %q, want %q", got, want)
+		}
+	}
+
+	{
+		got := page.Status
+		want := PageStatusOK
+		if got != want {
+			t.Fatalf("got page status %q, want %q", got, want)
+		}
+	}
+
+	{
+		got := page.DiscoveredAt == ""
+		want := false
+		if got != want {
+			t.Fatalf("got empty discovered_at %t, want %t", got, want)
+		}
+	}
+
+	{
+		got := len(page.BrokenLinks)
+		want := 2
+		if got != want {
+			t.Fatalf("got broken links len %d, want %d", got, want)
+		}
+	}
+
+	{
+		got := page.BrokenLinks[0].URL
+		want := "http://simple.test/assets/ghost.css"
+		if got != want {
+			t.Fatalf("got broken link URL %q, want %q", got, want)
+		}
+	}
+
+	{
+		got := page.BrokenLinks[0].StatusCode
+		want := http.StatusNotFound
+		if got != want {
+			t.Fatalf("got broken link status code %d, want %d", got, want)
+		}
+	}
+
+	{
+		got := page.BrokenLinks[0].Error
+		want := ""
+		if got != want {
+			t.Fatalf("got broken link error %q, want %q", got, want)
+		}
+	}
+
+	{
+		got := page.BrokenLinks[1].URL
+		want := "http://simple.test/images/missing.png"
+		if got != want {
+			t.Fatalf("got broken link URL %q, want %q", got, want)
+		}
+	}
+
+	{
+		got := page.BrokenLinks[1].StatusCode
+		want := 0
+		if got != want {
+			t.Fatalf("got broken link status code %d, want %d", got, want)
+		}
+	}
+
+	{
+		got := page.BrokenLinks[1].Error
+		want := "network is down"
+		if !strings.Contains(got, want) {
+			t.Fatalf("got broken link error %q, want it to contain %q", got, want)
+		}
+	}
+}
+
+func newTestResponse(rq *http.Request, statusCode int, status string, body string) *http.Response {
+	return &http.Response{
+		StatusCode: statusCode,
+		Status:     status,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Request:    rq,
+	}
+}
