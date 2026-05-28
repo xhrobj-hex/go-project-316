@@ -1,0 +1,46 @@
+name: (^_^) OpenCode PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  review:
+    # Ревьюим только PR от людей и не трогаем draft PR.
+    if: ${{ !endsWith(github.event.pull_request.user.login, '[bot]') && !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: read
+      issues: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Run OpenCode review
+        uses: anomalyco/opencode/github@latest
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+        with:
+          model: opencode/big-pickle
+          prompt: |
+            Проведи предварительное ревью этого pull request.
+
+            Контекст проекта:
+            - Это учебный Go-проект Hexlet "Парсер сайтов".
+            - Основные проверки: корректность логики, тестируемость, читаемость, простота решения.
+            - Не требуй больших архитектурных переписываний без явной необходимости.
+            - Не придирайся к вкусовым вещам, если они не влияют на поддержку кода.
+            - Обращай внимание на обработку ошибок, HTTP-сценарии, тесты, edge cases и соответствие требованиям задания.
+
+            Формат ответа:
+            - Сначала короткое резюме.
+            - Затем список найденных проблем, если они есть.
+            - Для каждой проблемы укажи файл/место, почему это важно и как исправить.
+            - Если критичных проблем нет, так и напиши.
+            - Пиши по-русски.
