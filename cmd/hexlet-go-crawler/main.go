@@ -60,15 +60,11 @@ func main() {
 				Usage: "per-request timeout",
 				Value: 15 * time.Second,
 			},
-
-			// ???: этого флага я не вижу в примере Options, он есть пока только в примере Справки
-			// ???: возможно, появится позже ...
 			&cli.IntFlag{
 				Name:  "rps",
 				Usage: "limit requests per second (overrides delay)",
 				Value: 0,
 			},
-
 			&cli.StringFlag{
 				Name:  "user-agent",
 				Usage: "custom user agent",
@@ -100,6 +96,7 @@ func main() {
 				Retries:     cmd.Int("retries"),
 				Delay:       cmd.Duration("delay"),
 				Timeout:     timeout,
+				RPS:         cmd.Int("rps"),
 				UserAgent:   cmd.String("user-agent"),
 				Concurrency: cmd.Int("workers"),
 				IndentJSON:  true,

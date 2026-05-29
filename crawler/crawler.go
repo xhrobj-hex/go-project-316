@@ -19,15 +19,16 @@ type crawlItem struct {
 	depth int
 }
 
-// Step1: Основная точка входа в crawler — функция:
+// Analyze запускает обход сайта и возвращает JSON-отчёт.
 //
-// func Analyze(ctx context.Context, opts Options) ([]byte, error)
+// Функция начинает обход с opts.URL, загружает страницы до заданной глубины,
+// собирает SEO-данные, проверяет ссылки на недоступные ресурсы и формирует
+// итоговый отчёт в формате JSON.
 //
-// Она принимает context.Context, чтобы можно было отменять обход, и структуру Options с параметрами запуска
-// (URL, Depth, Retries, Delay, Timeout, UserAgent, Concurrency, IndentJSON, HTTPClient).
+// Обход можно отменить через ctx. Перед каждым HTTP-запросом применяется
+// ограничение скорости из opts.Delay или opts.RPS, если оно задано.
 //
-// Функция возвращает JSON-отчет в виде байтового слайса и ошибку.
-
+// Для работы функции обязательны opts.URL и opts.HTTPClient.
 func Analyze(ctx context.Context, opts Options) ([]byte, error) {
 	if opts.URL == "" {
 		return nil, errors.New("url is required")
@@ -39,6 +40,7 @@ func Analyze(ctx context.Context, opts Options) ([]byte, error) {
 
 	generatedAt := time.Now().UTC().Format(time.RFC3339)
 	maxDepth := normalizeDepth(opts.Depth)
+	limiter := newRequestLimiter(opts)
 
 	queue := []crawlItem{
 		{
@@ -61,7 +63,7 @@ func Analyze(ctx context.Context, opts Options) ([]byte, error) {
 		item := queue[0]
 		queue = queue[1:]
 
-		page, body := analyzePage(ctx, opts, item.url, item.depth, generatedAt)
+		page, body := analyzePage(ctx, opts, limiter, item.url, item.depth, generatedAt)
 		pages = append(pages, page)
 
 		if page.Status != PageStatusOK {
@@ -75,11 +77,13 @@ func Analyze(ctx context.Context, opts Options) ([]byte, error) {
 
 		for _, link := range extractInternalPageLinks(opts.URL, page.URL, body) {
 			key := pageKey(link)
+
 			if _, exists := seen[key]; exists {
 				continue
 			}
 
 			seen[key] = struct{}{}
+
 			queue = append(queue, crawlItem{
 				url:   link,
 				depth: nextDepth,
@@ -115,7 +119,14 @@ func pageKey(rawPageURL string) string {
 	return parsedURL.String()
 }
 
-func analyzePage(ctx context.Context, opts Options, pageURL string, depth int, discoveredAt string) (PageReport, []byte) {
+func analyzePage(
+	ctx context.Context,
+	opts Options,
+	limiter *requestLimiter,
+	pageURL string,
+	depth int,
+	discoveredAt string,
+) (PageReport, []byte) {
 	page := PageReport{
 		URL:          pageURL,
 		Depth:        depth,
@@ -127,6 +138,7 @@ func analyzePage(ctx context.Context, opts Options, pageURL string, depth int, d
 	if err != nil {
 		page.Status = PageStatusError
 		page.Error = err.Error()
+
 		return page, nil
 	}
 
@@ -134,10 +146,18 @@ func analyzePage(ctx context.Context, opts Options, pageURL string, depth int, d
 		rq.Header.Set("User-Agent", opts.UserAgent)
 	}
 
+	if err := limiter.Wait(ctx); err != nil {
+		page.Status = PageStatusError
+		page.Error = err.Error()
+
+		return page, nil
+	}
+
 	rs, err := opts.HTTPClient.Do(rq)
 	if err != nil {
 		page.Status = PageStatusError
 		page.Error = err.Error()
+
 		return page, nil
 	}
 	defer func() {
@@ -149,6 +169,7 @@ func analyzePage(ctx context.Context, opts Options, pageURL string, depth int, d
 		page.HTTPStatus = rs.StatusCode
 		page.Status = PageStatusError
 		page.Error = err.Error()
+
 		return page, nil
 	}
 
@@ -157,7 +178,7 @@ func analyzePage(ctx context.Context, opts Options, pageURL string, depth int, d
 
 	if rs.StatusCode >= http.StatusOK && rs.StatusCode < http.StatusBadRequest {
 		page.Status = PageStatusOK
-		page.BrokenLinks = findBrokenLinks(ctx, opts, page.URL, body)
+		page.BrokenLinks = findBrokenLinks(ctx, opts, limiter, page.URL, body)
 	} else {
 		page.Status = PageStatusError
 		page.Error = rs.Status
@@ -181,13 +202,16 @@ func buildReport(opts Options, depth int, pages []PageReport, generatedAt string
 	return json.Marshal(report)
 }
 
-func findBrokenLinks(ctx context.Context, opts Options, pageURL string, body []byte) []BrokenLink {
+func findBrokenLinks(ctx context.Context, opts Options, limiter *requestLimiter, pageURL string, body []byte) []BrokenLink {
 	links := extractLinks(pageURL, body)
-
 	brokenLinks := make([]BrokenLink, 0)
 
 	for _, link := range links {
-		brokenLink, ok := checkBrokenLink(ctx, opts, link)
+		if ctx.Err() != nil {
+			break
+		}
+
+		brokenLink, ok := checkBrokenLink(ctx, opts, limiter, link)
 		if ok {
 			brokenLinks = append(brokenLinks, brokenLink)
 		}
@@ -211,6 +235,7 @@ func extractLinks(pageURL string, body []byte) []string {
 	seen := make(map[string]struct{})
 
 	var walk func(node *html.Node)
+
 	walk = func(node *html.Node) {
 		if node.Type == html.ElementNode {
 			for _, attr := range node.Attr {
@@ -272,7 +297,7 @@ func isSupportedScheme(scheme string) bool {
 	return scheme == "http" || scheme == "https"
 }
 
-func checkBrokenLink(ctx context.Context, opts Options, link string) (BrokenLink, bool) {
+func checkBrokenLink(ctx context.Context, opts Options, limiter *requestLimiter, link string) (BrokenLink, bool) {
 	rq, err := http.NewRequestWithContext(ctx, http.MethodGet, link, nil)
 	if err != nil {
 		return BrokenLink{
@@ -283,6 +308,10 @@ func checkBrokenLink(ctx context.Context, opts Options, link string) (BrokenLink
 
 	if opts.UserAgent != "" {
 		rq.Header.Set("User-Agent", opts.UserAgent)
+	}
+
+	if err := limiter.Wait(ctx); err != nil {
+		return BrokenLink{}, false
 	}
 
 	rs, err := opts.HTTPClient.Do(rq)
@@ -328,6 +357,7 @@ func extractInternalPageLinks(rootPageURL string, pageURL string, body []byte) [
 	seen := make(map[string]struct{})
 
 	var walk func(node *html.Node)
+
 	walk = func(node *html.Node) {
 		if node.Type == html.ElementNode && strings.EqualFold(node.Data, "a") {
 			for _, attr := range node.Attr {

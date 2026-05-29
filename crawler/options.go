@@ -5,17 +5,38 @@ import (
 	"time"
 )
 
-// Step1: Options с параметрами запуска
-// (URL, Depth, Retries, Delay, Timeout, UserAgent, Concurrency, IndentJSON, HTTPClient).
-
+// Options хранит параметры запуска анализатора сайта.
+//
+// URL и HTTPClient обязательны. Delay и RPS управляют скоростью HTTP-запросов;
+// если указаны оба параметра, приоритет имеет RPS.
 type Options struct {
-	URL         string
-	Depth       int
-	Retries     int
-	Delay       time.Duration
-	Timeout     time.Duration
-	UserAgent   string
+	// URL задаёт стартовый адрес для обхода сайта.
+	URL string
+
+	// Depth задаёт максимальную глубину обхода.
+	Depth int
+
+	// Retries задаёт количество повторных попыток HTTP-запроса.
+	Retries int
+
+	// Delay задаёт фиксированную паузу между соседними HTTP-запросами.
+	Delay time.Duration
+
+	// RPS задаёт целевое количество HTTP-запросов в секунду.
+	RPS int
+
+	// Timeout задаёт максимальное время ожидания HTTP-запроса.
+	Timeout time.Duration
+
+	// UserAgent задаёт значение заголовка User-Agent для HTTP-запросов.
+	UserAgent string
+
+	// Concurrency задаёт максимальное количество параллельных обработчиков.
 	Concurrency int
-	IndentJSON  bool
-	HTTPClient  *http.Client
+
+	// IndentJSON включает форматированный JSON-отчёт.
+	IndentJSON bool
+
+	// HTTPClient выполняет HTTP-запросы во время обхода сайта.
+	HTTPClient *http.Client
 }
