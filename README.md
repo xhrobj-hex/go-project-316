@@ -4,9 +4,17 @@
 
 `hexlet-go-crawler` - CLI-утилита для анализа структуры сайта и формирования JSON-отчёта.
 
+Утилита загружает стартовую страницу, обходит внутренние ссылки в пределах заданной глубины и собирает по каждой странице:
+
+- HTTP-статус;
+- статус обработки;
+- список битых ссылок;
+- SEO-данные;
+- время обнаружения страницы.
+
 ### Глубина обхода
 
-Флаг `--depth` задаёт максимальное количество уровней обхода внутренних ссылок.
+Флаг `--depth` задаёт количество уровней обхода, включая стартовую страницу.
 
 Стартовая страница всегда имеет `depth: 0`.
 
@@ -38,6 +46,12 @@ bin/hexlet-go-crawler
 make test
 ```
 
+### Запуск линтера
+
+```bash
+make lint
+```
+
 ### Запуск crawler
 
 ```bash
@@ -53,6 +67,18 @@ go run ./cmd/hexlet-go-crawler https://example.com
 ```
 
 То есть само Go-приложение получает адрес сайта как обычный аргумент командной строки, а не читает переменную окружения `URL`.
+
+Запуск с параметрами можно выполнить напрямую:
+
+```bash
+go run ./cmd/hexlet-go-crawler --depth=2 https://example.com
+```
+
+После сборки:
+
+```bash
+bin/hexlet-go-crawler --depth=2 https://example.com
+```
 
 ### Справка
 
@@ -80,18 +106,32 @@ bin/hexlet-go-crawler --help
 
 ```json
 {
-  "root_url": "https://example.com",
-  "depth": 10,
-  "generated_at": "2026-05-27T16:23:27Z",
-  "pages": [
+ "root_url": "https://example.com",
+ "depth": 2,
+ "generated_at": "2026-05-29T15:01:47Z",
+ "pages": [
+  {
+   "url": "https://example.com",
+   "depth": 0,
+   "http_status": 200,
+   "status": "ok",
+   "error": "",
+   "broken_links": [
     {
-      "url": "https://example.com",
-      "depth": 0,
-      "http_status": 200,
-      "status": "ok",
-      "error": ""
+     "url": "https://iana.org/domains/example",
+     "error": "Get \"https://iana.org/domains/example\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)"
     }
-  ]
+   ],
+   "discovered_at": "2026-05-29T15:01:47Z",
+   "seo": {
+    "has_title": true,
+    "title": "Example Domain",
+    "has_description": false,
+    "description": "",
+    "has_h1": true
+   }
+  }
+ ]
 }
 ```
 
