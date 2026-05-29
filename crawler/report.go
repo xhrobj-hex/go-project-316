@@ -38,6 +38,7 @@ type PageReport struct {
 	Error        string       `json:"error"`
 	BrokenLinks  []BrokenLink `json:"broken_links"`
 	DiscoveredAt string       `json:"discovered_at"` // ???: в примере step 3 есть поле "discovered_at", но другой инфы про него пока нет
+	SEO          SEOReport    `json:"seo"`
 }
 
 // Step 3: Пример битых ссылок:
@@ -71,4 +72,32 @@ type BrokenLink struct {
 	URL        string `json:"url"`
 	StatusCode int    `json:"status_code,omitempty"`
 	Error      string `json:"error,omitempty"`
+}
+
+// Step 4: Добавляется объект SEO. Пример:
+
+// {
+//   "pages": [
+//     {
+//       "url": "http://example.test",
+//       "depth": 0,
+//       "http_status": 200,
+//       "status": "ok",
+//       "seo": {
+//         "has_title": true,
+//         "title": "Example Test",
+//         "has_description": false,
+//         "description": "",
+//         "has_h1": true
+//       }
+//     }
+//   ]
+// }
+
+type SEOReport struct {
+	HasTitle       bool   `json:"has_title"`
+	Title          string `json:"title"`
+	HasDescription bool   `json:"has_description"`
+	Description    string `json:"description"`
+	HasH1          bool   `json:"has_h1"`
 }
