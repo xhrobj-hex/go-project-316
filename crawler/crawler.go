@@ -14,6 +14,11 @@ import (
 	"golang.org/x/net/html"
 )
 
+type crawlItem struct {
+	url   string
+	depth int
+}
+
 // Step1: Основная точка входа в crawler — функция:
 //
 // func Analyze(ctx context.Context, opts Options) ([]byte, error)
@@ -32,21 +37,97 @@ func Analyze(ctx context.Context, opts Options) ([]byte, error) {
 		return nil, errors.New("http client is required")
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	generatedAt := time.Now().UTC().Format(time.RFC3339)
+	maxDepth := normalizeDepth(opts.Depth)
 
-	page := PageReport{
-		URL:          opts.URL,
-		Depth:        0,
-		BrokenLinks:  []BrokenLink{},
-		DiscoveredAt: now,
+	queue := []crawlItem{
+		{
+			url:   opts.URL,
+			depth: 0,
+		},
 	}
 
-	rq, err := http.NewRequestWithContext(ctx, http.MethodGet, opts.URL, nil)
+	seen := map[string]struct{}{
+		pageKey(opts.URL): {},
+	}
+
+	pages := make([]PageReport, 0)
+
+	for len(queue) > 0 {
+		if ctx.Err() != nil {
+			break
+		}
+
+		item := queue[0]
+		queue = queue[1:]
+
+		page, body := analyzePage(ctx, opts, item.url, item.depth, generatedAt)
+		pages = append(pages, page)
+
+		if page.Status != PageStatusOK {
+			continue
+		}
+
+		nextDepth := item.depth + 1
+		if nextDepth >= maxDepth {
+			continue
+		}
+
+		for _, link := range extractInternalPageLinks(opts.URL, page.URL, body) {
+			key := pageKey(link)
+			if _, exists := seen[key]; exists {
+				continue
+			}
+
+			seen[key] = struct{}{}
+			queue = append(queue, crawlItem{
+				url:   link,
+				depth: nextDepth,
+			})
+		}
+	}
+
+	return buildReport(opts, maxDepth, pages, generatedAt)
+}
+
+func normalizeDepth(depth int) int {
+	if depth < 1 {
+		return 1
+	}
+
+	return depth
+}
+
+func pageKey(rawPageURL string) string {
+	parsedURL, err := url.Parse(rawPageURL)
+	if err != nil {
+		return rawPageURL
+	}
+
+	parsedURL.Scheme = strings.ToLower(parsedURL.Scheme)
+	parsedURL.Host = strings.ToLower(parsedURL.Host)
+	parsedURL.Fragment = ""
+
+	if parsedURL.Path == "" {
+		parsedURL.Path = "/"
+	}
+
+	return parsedURL.String()
+}
+
+func analyzePage(ctx context.Context, opts Options, pageURL string, depth int, discoveredAt string) (PageReport, []byte) {
+	page := PageReport{
+		URL:          pageURL,
+		Depth:        depth,
+		BrokenLinks:  []BrokenLink{},
+		DiscoveredAt: discoveredAt,
+	}
+
+	rq, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
 	if err != nil {
 		page.Status = PageStatusError
 		page.Error = err.Error()
-
-		return buildReport(opts, page, now)
+		return page, nil
 	}
 
 	if opts.UserAgent != "" {
@@ -57,8 +138,7 @@ func Analyze(ctx context.Context, opts Options) ([]byte, error) {
 	if err != nil {
 		page.Status = PageStatusError
 		page.Error = err.Error()
-
-		return buildReport(opts, page, now)
+		return page, nil
 	}
 	defer func() {
 		_ = rs.Body.Close()
@@ -69,8 +149,7 @@ func Analyze(ctx context.Context, opts Options) ([]byte, error) {
 		page.HTTPStatus = rs.StatusCode
 		page.Status = PageStatusError
 		page.Error = err.Error()
-
-		return buildReport(opts, page, now)
+		return page, nil
 	}
 
 	page.HTTPStatus = rs.StatusCode
@@ -84,19 +163,19 @@ func Analyze(ctx context.Context, opts Options) ([]byte, error) {
 		page.Error = rs.Status
 	}
 
-	return buildReport(opts, page, now)
+	return page, body
 }
 
-func buildReport(opts Options, page PageReport, generatedAt string) ([]byte, error) {
+func buildReport(opts Options, depth int, pages []PageReport, generatedAt string) ([]byte, error) {
 	report := Report{
 		RootURL:     opts.URL,
-		Depth:       opts.Depth,
+		Depth:       depth,
 		GeneratedAt: generatedAt,
-		Pages:       []PageReport{page},
+		Pages:       pages,
 	}
 
 	if opts.IndentJSON {
-		return json.MarshalIndent(report, "", "  ")
+		return json.MarshalIndent(report, "", " ")
 	}
 
 	return json.Marshal(report)
@@ -227,4 +306,64 @@ func checkBrokenLink(ctx context.Context, opts Options, link string) (BrokenLink
 	}
 
 	return BrokenLink{}, false
+}
+
+func extractInternalPageLinks(rootPageURL string, pageURL string, body []byte) []string {
+	rootURL, err := url.Parse(rootPageURL)
+	if err != nil {
+		return nil
+	}
+
+	baseURL, err := url.Parse(pageURL)
+	if err != nil {
+		return nil
+	}
+
+	document, err := html.Parse(bytes.NewReader(body))
+	if err != nil {
+		return nil
+	}
+
+	links := make([]string, 0)
+	seen := make(map[string]struct{})
+
+	var walk func(node *html.Node)
+	walk = func(node *html.Node) {
+		if node.Type == html.ElementNode && strings.EqualFold(node.Data, "a") {
+			for _, attr := range node.Attr {
+				if !strings.EqualFold(attr.Key, "href") {
+					continue
+				}
+
+				link, ok := normalizeLink(baseURL, attr.Val)
+				if !ok {
+					continue
+				}
+
+				parsedLink, err := url.Parse(link)
+				if err != nil {
+					continue
+				}
+
+				if !strings.EqualFold(parsedLink.Host, rootURL.Host) {
+					continue
+				}
+
+				if _, exists := seen[link]; exists {
+					continue
+				}
+
+				seen[link] = struct{}{}
+				links = append(links, link)
+			}
+		}
+
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			walk(child)
+		}
+	}
+
+	walk(document)
+
+	return links
 }

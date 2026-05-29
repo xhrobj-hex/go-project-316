@@ -16,6 +16,19 @@ func (f roundTripFunc) RoundTrip(rq *http.Request) (*http.Response, error) {
 	return f(rq)
 }
 
+func findPageByURL(t *testing.T, pages []PageReport, pageURL string) PageReport {
+	t.Helper()
+
+	for _, page := range pages {
+		if page.URL == pageURL {
+			return page
+		}
+	}
+
+	t.Fatalf("got no page with URL %q", pageURL)
+	return PageReport{}
+}
+
 func TestAnalyze_UsesProvidedHTTPClient(t *testing.T) {
 	called := false
 
@@ -360,7 +373,7 @@ func TestAnalyze_ReportsBrokenLinksFromHTMLPage(t *testing.T) {
 
 	result, err := Analyze(context.Background(), Options{
 		URL:        "http://simple.test/blog/index.html",
-		Depth:      2,
+		Depth:      1,
 		HTTPClient: client,
 	})
 	if err != nil {
@@ -690,6 +703,274 @@ func TestAnalyze_DecodesHTMLEntitiesInSEOText(t *testing.T) {
 
 		if got != want {
 			t.Fatalf("got description %q, want %q", got, want)
+		}
+	}
+}
+
+func TestAnalyze_DepthOneReportsOnlyRootPage(t *testing.T) {
+	htmlBody := `<a href="/about.html">about</a>`
+
+	client := &http.Client{
+		Transport: roundTripFunc(func(rq *http.Request) (*http.Response, error) {
+			switch rq.URL.String() {
+			case "http://simple.test":
+				return newTestResponse(rq, http.StatusOK, "200 OK", htmlBody), nil
+			case "http://simple.test/about.html":
+				return newTestResponse(rq, http.StatusOK, "200 OK", `<title>About</title>`), nil
+			default:
+				t.Fatalf("got unexpected request URL %q", rq.URL.String())
+				return nil, nil
+			}
+		}),
+	}
+
+	result, err := Analyze(context.Background(), Options{
+		URL:        "http://simple.test",
+		Depth:      1,
+		HTTPClient: client,
+	})
+	if err != nil {
+		t.Fatalf("got error %v, want nil", err)
+	}
+
+	var report Report
+	if err := json.Unmarshal(result, &report); err != nil {
+		t.Fatalf("got unmarshal error %v, want nil", err)
+	}
+
+	{
+		got := len(report.Pages)
+		want := 1
+		if got != want {
+			t.Fatalf("got pages len %d, want %d", got, want)
+		}
+	}
+
+	{
+		got := report.Pages[0].URL
+		want := "http://simple.test"
+		if got != want {
+			t.Fatalf("got page URL %q, want %q", got, want)
+		}
+	}
+
+	{
+		got := report.Pages[0].Depth
+		want := 0
+		if got != want {
+			t.Fatalf("got page depth %d, want %d", got, want)
+		}
+	}
+}
+
+func TestAnalyze_DepthTwoReportsInternalPagesOnly(t *testing.T) {
+	rootBody := `
+		<a href="/about.html">about</a>
+		<a href="/contacts.html">contacts</a>
+		<a href="https://external.test/page.html">external</a>
+	`
+
+	client := &http.Client{
+		Transport: roundTripFunc(func(rq *http.Request) (*http.Response, error) {
+			switch rq.URL.String() {
+			case "http://simple.test":
+				return newTestResponse(rq, http.StatusOK, "200 OK", rootBody), nil
+			case "http://simple.test/about.html":
+				return newTestResponse(rq, http.StatusOK, "200 OK", `<title>About</title><h1>About</h1>`), nil
+			case "http://simple.test/contacts.html":
+				return newTestResponse(rq, http.StatusOK, "200 OK", `<title>Contacts</title>`), nil
+			case "https://external.test/page.html":
+				return newTestResponse(rq, http.StatusOK, "200 OK", `<title>External</title>`), nil
+			default:
+				t.Fatalf("got unexpected request URL %q", rq.URL.String())
+				return nil, nil
+			}
+		}),
+	}
+
+	result, err := Analyze(context.Background(), Options{
+		URL:        "http://simple.test",
+		Depth:      2,
+		HTTPClient: client,
+	})
+	if err != nil {
+		t.Fatalf("got error %v, want nil", err)
+	}
+
+	var report Report
+	if err := json.Unmarshal(result, &report); err != nil {
+		t.Fatalf("got unmarshal error %v, want nil", err)
+	}
+
+	{
+		got := len(report.Pages)
+		want := 3
+		if got != want {
+			t.Fatalf("got pages len %d, want %d", got, want)
+		}
+	}
+
+	rootPage := findPageByURL(t, report.Pages, "http://simple.test")
+	{
+		got := rootPage.Depth
+		want := 0
+		if got != want {
+			t.Fatalf("got root page depth %d, want %d", got, want)
+		}
+	}
+
+	aboutPage := findPageByURL(t, report.Pages, "http://simple.test/about.html")
+	{
+		got := aboutPage.Depth
+		want := 1
+		if got != want {
+			t.Fatalf("got about page depth %d, want %d", got, want)
+		}
+	}
+
+	{
+		got := aboutPage.SEO.Title
+		want := "About"
+		if got != want {
+			t.Fatalf("got about page title %q, want %q", got, want)
+		}
+	}
+
+	contactsPage := findPageByURL(t, report.Pages, "http://simple.test/contacts.html")
+	{
+		got := contactsPage.Depth
+		want := 1
+		if got != want {
+			t.Fatalf("got contacts page depth %d, want %d", got, want)
+		}
+	}
+}
+
+func TestAnalyze_DoesNotReportDuplicateInternalPages(t *testing.T) {
+	rootBody := `
+		<a href="/about.html">about</a>
+		<a href="/about.html#top">about again</a>
+	`
+
+	client := &http.Client{
+		Transport: roundTripFunc(func(rq *http.Request) (*http.Response, error) {
+			switch rq.URL.String() {
+			case "http://simple.test":
+				return newTestResponse(rq, http.StatusOK, "200 OK", rootBody), nil
+			case "http://simple.test/about.html":
+				return newTestResponse(rq, http.StatusOK, "200 OK", `<title>About</title>`), nil
+			default:
+				t.Fatalf("got unexpected request URL %q", rq.URL.String())
+				return nil, nil
+			}
+		}),
+	}
+
+	result, err := Analyze(context.Background(), Options{
+		URL:        "http://simple.test",
+		Depth:      2,
+		HTTPClient: client,
+	})
+	if err != nil {
+		t.Fatalf("got error %v, want nil", err)
+	}
+
+	var report Report
+	if err := json.Unmarshal(result, &report); err != nil {
+		t.Fatalf("got unmarshal error %v, want nil", err)
+	}
+
+	{
+		got := len(report.Pages)
+		want := 2
+		if got != want {
+			t.Fatalf("got pages len %d, want %d", got, want)
+		}
+	}
+}
+
+func TestAnalyze_DoesNotReportRootPageTwiceWhenHomeLinkHasSlash(t *testing.T) {
+	htmlBody := `<a href="/">home</a>`
+
+	client := &http.Client{
+		Transport: roundTripFunc(func(rq *http.Request) (*http.Response, error) {
+			switch rq.URL.String() {
+			case "http://simple.test":
+				return newTestResponse(rq, http.StatusOK, "200 OK", htmlBody), nil
+			case "http://simple.test/":
+				return newTestResponse(rq, http.StatusOK, "200 OK", "ok"), nil
+			default:
+				t.Fatalf("got unexpected request URL %q", rq.URL.String())
+				return nil, nil
+			}
+		}),
+	}
+
+	result, err := Analyze(context.Background(), Options{
+		URL:        "http://simple.test",
+		Depth:      2,
+		HTTPClient: client,
+	})
+	if err != nil {
+		t.Fatalf("got error %v, want nil", err)
+	}
+
+	var report Report
+	if err := json.Unmarshal(result, &report); err != nil {
+		t.Fatalf("got unmarshal error %v, want nil", err)
+	}
+
+	{
+		got := len(report.Pages)
+		want := 1
+		if got != want {
+			t.Fatalf("got pages len %d, want %d", got, want)
+		}
+	}
+
+	{
+		got := report.Pages[0].URL
+		want := "http://simple.test"
+		if got != want {
+			t.Fatalf("got page URL %q, want %q", got, want)
+		}
+	}
+}
+
+func TestAnalyze_NormalizesNonPositiveDepthInReport(t *testing.T) {
+	client := &http.Client{
+		Transport: roundTripFunc(func(rq *http.Request) (*http.Response, error) {
+			return newTestResponse(rq, http.StatusOK, "200 OK", "ok"), nil
+		}),
+	}
+
+	result, err := Analyze(context.Background(), Options{
+		URL:        "http://simple.test",
+		Depth:      0,
+		HTTPClient: client,
+	})
+	if err != nil {
+		t.Fatalf("got error %v, want nil", err)
+	}
+
+	var report Report
+	if err := json.Unmarshal(result, &report); err != nil {
+		t.Fatalf("got unmarshal error %v, want nil", err)
+	}
+
+	{
+		got := report.Depth
+		want := 1
+		if got != want {
+			t.Fatalf("got report depth %d, want %d", got, want)
+		}
+	}
+
+	{
+		got := len(report.Pages)
+		want := 1
+		if got != want {
+			t.Fatalf("got pages len %d, want %d", got, want)
 		}
 	}
 }
