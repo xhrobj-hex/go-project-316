@@ -42,23 +42,19 @@ func (limiter *requestLimiter) Wait(ctx context.Context) error {
 		return err
 	}
 
-	if limiter == nil || limiter.interval <= 0 {
+	if limiter.interval == 0 {
 		return nil
 	}
 
 	if limiter.firstRequest {
 		limiter.firstRequest = false
-		return nil
+		return ctx.Err()
 	}
 
 	return limiter.wait(ctx, limiter.interval)
 }
 
 func waitWithContext(ctx context.Context, delay time.Duration) error {
-	if delay <= 0 {
-		return nil
-	}
-
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 
