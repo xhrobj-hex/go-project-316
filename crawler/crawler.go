@@ -74,6 +74,7 @@ func Analyze(ctx context.Context, opts Options) ([]byte, error) {
 	}
 
 	page.HTTPStatus = rs.StatusCode
+	page.SEO = extractSEO(body)
 
 	if rs.StatusCode >= http.StatusOK && rs.StatusCode < http.StatusBadRequest {
 		page.Status = PageStatusOK
