@@ -61,7 +61,6 @@ func main() {
 				Value: 15 * time.Second,
 			},
 
-			// !!!: в шаге 6 появился - супер!
 			&cli.IntFlag{
 				Name:  "rps",
 				Usage: "limit requests per second (overrides delay)",

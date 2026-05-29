@@ -38,17 +38,17 @@ func requestInterval(opts Options) time.Duration {
 }
 
 func (limiter *requestLimiter) Wait(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	if limiter == nil || limiter.interval <= 0 {
+	if limiter.interval == 0 {
 		return nil
 	}
 
 	if limiter.firstRequest {
 		limiter.firstRequest = false
-		return nil
+		return ctx.Err()
+	}
+
+	if ctx.Err() != nil {
+		return ctx.Err()
 	}
 
 	return limiter.wait(ctx, limiter.interval)
