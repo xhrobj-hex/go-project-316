@@ -888,3 +888,89 @@ func TestAnalyze_DoesNotReportDuplicateInternalPages(t *testing.T) {
 		}
 	}
 }
+
+func TestAnalyze_DoesNotReportRootPageTwiceWhenHomeLinkHasSlash(t *testing.T) {
+	htmlBody := `<a href="/">home</a>`
+
+	client := &http.Client{
+		Transport: roundTripFunc(func(rq *http.Request) (*http.Response, error) {
+			switch rq.URL.String() {
+			case "http://simple.test":
+				return newTestResponse(rq, http.StatusOK, "200 OK", htmlBody), nil
+			case "http://simple.test/":
+				return newTestResponse(rq, http.StatusOK, "200 OK", "ok"), nil
+			default:
+				t.Fatalf("got unexpected request URL %q", rq.URL.String())
+				return nil, nil
+			}
+		}),
+	}
+
+	result, err := Analyze(context.Background(), Options{
+		URL:        "http://simple.test",
+		Depth:      2,
+		HTTPClient: client,
+	})
+	if err != nil {
+		t.Fatalf("got error %v, want nil", err)
+	}
+
+	var report Report
+	if err := json.Unmarshal(result, &report); err != nil {
+		t.Fatalf("got unmarshal error %v, want nil", err)
+	}
+
+	{
+		got := len(report.Pages)
+		want := 1
+		if got != want {
+			t.Fatalf("got pages len %d, want %d", got, want)
+		}
+	}
+
+	{
+		got := report.Pages[0].URL
+		want := "http://simple.test"
+		if got != want {
+			t.Fatalf("got page URL %q, want %q", got, want)
+		}
+	}
+}
+
+func TestAnalyze_NormalizesNonPositiveDepthInReport(t *testing.T) {
+	client := &http.Client{
+		Transport: roundTripFunc(func(rq *http.Request) (*http.Response, error) {
+			return newTestResponse(rq, http.StatusOK, "200 OK", "ok"), nil
+		}),
+	}
+
+	result, err := Analyze(context.Background(), Options{
+		URL:        "http://simple.test",
+		Depth:      0,
+		HTTPClient: client,
+	})
+	if err != nil {
+		t.Fatalf("got error %v, want nil", err)
+	}
+
+	var report Report
+	if err := json.Unmarshal(result, &report); err != nil {
+		t.Fatalf("got unmarshal error %v, want nil", err)
+	}
+
+	{
+		got := report.Depth
+		want := 1
+		if got != want {
+			t.Fatalf("got report depth %d, want %d", got, want)
+		}
+	}
+
+	{
+		got := len(report.Pages)
+		want := 1
+		if got != want {
+			t.Fatalf("got pages len %d, want %d", got, want)
+		}
+	}
+}

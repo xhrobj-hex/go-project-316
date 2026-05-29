@@ -38,11 +38,7 @@ func Analyze(ctx context.Context, opts Options) ([]byte, error) {
 	}
 
 	generatedAt := time.Now().UTC().Format(time.RFC3339)
-
-	maxDepth := opts.Depth
-	if maxDepth < 1 {
-		maxDepth = 1
-	}
+	maxDepth := normalizeDepth(opts.Depth)
 
 	queue := []crawlItem{
 		{
@@ -52,7 +48,7 @@ func Analyze(ctx context.Context, opts Options) ([]byte, error) {
 	}
 
 	seen := map[string]struct{}{
-		opts.URL: {},
+		pageKey(opts.URL): {},
 	}
 
 	pages := make([]PageReport, 0)
@@ -78,11 +74,12 @@ func Analyze(ctx context.Context, opts Options) ([]byte, error) {
 		}
 
 		for _, link := range extractInternalPageLinks(opts.URL, page.URL, body) {
-			if _, exists := seen[link]; exists {
+			key := pageKey(link)
+			if _, exists := seen[key]; exists {
 				continue
 			}
 
-			seen[link] = struct{}{}
+			seen[key] = struct{}{}
 			queue = append(queue, crawlItem{
 				url:   link,
 				depth: nextDepth,
@@ -90,7 +87,32 @@ func Analyze(ctx context.Context, opts Options) ([]byte, error) {
 		}
 	}
 
-	return buildReport(opts, pages, generatedAt)
+	return buildReport(opts, maxDepth, pages, generatedAt)
+}
+
+func normalizeDepth(depth int) int {
+	if depth < 1 {
+		return 1
+	}
+
+	return depth
+}
+
+func pageKey(rawPageURL string) string {
+	parsedURL, err := url.Parse(rawPageURL)
+	if err != nil {
+		return rawPageURL
+	}
+
+	parsedURL.Scheme = strings.ToLower(parsedURL.Scheme)
+	parsedURL.Host = strings.ToLower(parsedURL.Host)
+	parsedURL.Fragment = ""
+
+	if parsedURL.Path == "" {
+		parsedURL.Path = "/"
+	}
+
+	return parsedURL.String()
 }
 
 func analyzePage(ctx context.Context, opts Options, pageURL string, depth int, discoveredAt string) (PageReport, []byte) {
@@ -144,10 +166,10 @@ func analyzePage(ctx context.Context, opts Options, pageURL string, depth int, d
 	return page, body
 }
 
-func buildReport(opts Options, pages []PageReport, generatedAt string) ([]byte, error) {
+func buildReport(opts Options, depth int, pages []PageReport, generatedAt string) ([]byte, error) {
 	report := Report{
 		RootURL:     opts.URL,
-		Depth:       opts.Depth,
+		Depth:       depth,
 		GeneratedAt: generatedAt,
 		Pages:       pages,
 	}
