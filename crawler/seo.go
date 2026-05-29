@@ -55,7 +55,7 @@ func isDescriptionMeta(node *html.Node) bool {
 		return false
 	}
 
-	return strings.EqualFold(cleanSEOText(name), "description")
+	return strings.EqualFold(strings.TrimSpace(name), "description")
 }
 
 func attrValue(node *html.Node, name string) (string, bool) {
