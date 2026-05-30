@@ -417,3 +417,26 @@ func TestAnalyze_ContextCancelStopsRetries(t *testing.T) {
 		}
 	}
 }
+
+// TestWaitBeforeRetry_ContextCancelStopsWaiting проверяет, что отмена контекста
+// прерывает ожидание перед повторной попыткой.
+func TestWaitBeforeRetry_ContextCancelStopsWaiting(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	errCh := make(chan error, 1)
+
+	go func() {
+		errCh <- waitBeforeRetry(ctx, time.Hour)
+	}()
+
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("got wait error %v, want %v", err, context.Canceled)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("got hanging wait, want context cancellation to stop it")
+	}
+}

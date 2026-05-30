@@ -240,14 +240,22 @@ func shouldRetry(ctx context.Context, rs *http.Response, err error) bool {
 }
 
 func retryDelay(opts Options) time.Duration {
-	if opts.Delay > 0 {
-		return opts.Delay
+	if opts.Delay > 0 || opts.RPS > 0 {
+		return 0
 	}
 
 	return defaultRetryDelay
 }
 
 func waitBeforeRetry(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		return nil
+	}
+
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 
