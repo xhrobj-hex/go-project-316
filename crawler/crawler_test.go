@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+const mockedBaseURL = "http://crawler.test"
+
 type roundTripFunc func(rq *http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(rq *http.Request) (*http.Response, error) {
@@ -1187,5 +1189,351 @@ func TestAnalyze_LimitedAndUnlimitedSpeedProcessSamePages(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestAnalyze_RetriesNetworkErrorAndUsesLastAttempt(t *testing.T) {
+	requestsCount := 0
+
+	mockedClient := &http.Client{
+		Transport: roundTripFunc(func(rq *http.Request) (*http.Response, error) {
+			requestsCount++
+
+			got := rq.URL.String()
+			want := mockedBaseURL
+			if got != want {
+				t.Fatalf("got request URL %q, want %q", got, want)
+			}
+
+			if requestsCount == 1 {
+				return nil, errors.New("network is down")
+			}
+
+			return newTestResponse(rq, http.StatusOK, "200 OK", "<title>OK</title>"), nil
+		}),
+	}
+
+	result, err := Analyze(context.Background(), Options{
+		URL:        mockedBaseURL,
+		Depth:      1,
+		Retries:    2,
+		Delay:      time.Nanosecond,
+		HTTPClient: mockedClient,
+	})
+	if err != nil {
+		t.Fatalf("got error %v, want nil", err)
+	}
+
+	{
+		got := requestsCount
+		want := 2
+
+		if got != want {
+			t.Fatalf("got requests count %d, want %d", got, want)
+		}
+	}
+
+	var report Report
+	if err := json.Unmarshal(result, &report); err != nil {
+		t.Fatalf("got unmarshal error %v, want nil", err)
+	}
+
+	page := report.Pages[0]
+
+	{
+		got := page.HTTPStatus
+		want := http.StatusOK
+
+		if got != want {
+			t.Fatalf("got HTTP status %d, want %d", got, want)
+		}
+	}
+
+	{
+		got := page.Status
+		want := PageStatusOK
+
+		if got != want {
+			t.Fatalf("got page status %q, want %q", got, want)
+		}
+	}
+
+	{
+		got := page.Error
+		want := ""
+
+		if got != want {
+			t.Fatalf("got page error %q, want %q", got, want)
+		}
+	}
+}
+
+func TestAnalyze_RetriesTemporaryHTTPStatusAndUsesLastAttempt(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		status     string
+	}{
+		{
+			name:       "too many requests",
+			statusCode: http.StatusTooManyRequests,
+			status:     "429 Too Many Requests",
+		},
+		{
+			name:       "internal server error",
+			statusCode: http.StatusInternalServerError,
+			status:     "500 Internal Server Error",
+		},
+		{
+			name:       "service unavailable",
+			statusCode: http.StatusServiceUnavailable,
+			status:     "503 Service Unavailable",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			requestsCount := 0
+
+			mockedClient := &http.Client{
+				Transport: roundTripFunc(func(rq *http.Request) (*http.Response, error) {
+					requestsCount++
+
+					got := rq.URL.String()
+					want := mockedBaseURL
+					if got != want {
+						t.Fatalf("got request URL %q, want %q", got, want)
+					}
+
+					if requestsCount == 1 {
+						return newTestResponse(rq, tt.statusCode, tt.status, "try later"), nil
+					}
+
+					return newTestResponse(rq, http.StatusOK, "200 OK", "<title>OK</title>"), nil
+				}),
+			}
+
+			result, err := Analyze(context.Background(), Options{
+				URL:        mockedBaseURL,
+				Depth:      1,
+				Retries:    2,
+				Delay:      time.Nanosecond,
+				HTTPClient: mockedClient,
+			})
+			if err != nil {
+				t.Fatalf("got error %v, want nil", err)
+			}
+
+			{
+				got := requestsCount
+				want := 2
+
+				if got != want {
+					t.Fatalf("got requests count %d, want %d", got, want)
+				}
+			}
+
+			var report Report
+			if err := json.Unmarshal(result, &report); err != nil {
+				t.Fatalf("got unmarshal error %v, want nil", err)
+			}
+
+			page := report.Pages[0]
+
+			{
+				got := page.HTTPStatus
+				want := http.StatusOK
+
+				if got != want {
+					t.Fatalf("got HTTP status %d, want %d", got, want)
+				}
+			}
+
+			{
+				got := page.Status
+				want := PageStatusOK
+
+				if got != want {
+					t.Fatalf("got page status %q, want %q", got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestAnalyze_DoesNotRetryPermanentClientError(t *testing.T) {
+	requestsCount := 0
+
+	mockedClient := &http.Client{
+		Transport: roundTripFunc(func(rq *http.Request) (*http.Response, error) {
+			requestsCount++
+
+			return newTestResponse(rq, http.StatusNotFound, "404 Not Found", "not found"), nil
+		}),
+	}
+
+	result, err := Analyze(context.Background(), Options{
+		URL:        mockedBaseURL,
+		Depth:      1,
+		Retries:    2,
+		Delay:      time.Nanosecond,
+		HTTPClient: mockedClient,
+	})
+	if err != nil {
+		t.Fatalf("got error %v, want nil", err)
+	}
+
+	{
+		got := requestsCount
+		want := 1
+
+		if got != want {
+			t.Fatalf("got requests count %d, want %d", got, want)
+		}
+	}
+
+	var report Report
+	if err := json.Unmarshal(result, &report); err != nil {
+		t.Fatalf("got unmarshal error %v, want nil", err)
+	}
+
+	page := report.Pages[0]
+
+	{
+		got := page.HTTPStatus
+		want := http.StatusNotFound
+
+		if got != want {
+			t.Fatalf("got HTTP status %d, want %d", got, want)
+		}
+	}
+
+	{
+		got := page.Status
+		want := PageStatusError
+
+		if got != want {
+			t.Fatalf("got page status %q, want %q", got, want)
+		}
+	}
+}
+
+func TestAnalyze_StopsAfterRetryLimit(t *testing.T) {
+	requestsCount := 0
+
+	mockedClient := &http.Client{
+		Transport: roundTripFunc(func(rq *http.Request) (*http.Response, error) {
+			requestsCount++
+
+			return newTestResponse(rq, http.StatusServiceUnavailable, "503 Service Unavailable", "try later"), nil
+		}),
+	}
+
+	result, err := Analyze(context.Background(), Options{
+		URL:        mockedBaseURL,
+		Depth:      1,
+		Retries:    2,
+		Delay:      time.Nanosecond,
+		HTTPClient: mockedClient,
+	})
+	if err != nil {
+		t.Fatalf("got error %v, want nil", err)
+	}
+
+	{
+		got := requestsCount
+		want := 3
+
+		if got != want {
+			t.Fatalf("got requests count %d, want %d", got, want)
+		}
+	}
+
+	var report Report
+	if err := json.Unmarshal(result, &report); err != nil {
+		t.Fatalf("got unmarshal error %v, want nil", err)
+	}
+
+	page := report.Pages[0]
+
+	{
+		got := page.HTTPStatus
+		want := http.StatusServiceUnavailable
+
+		if got != want {
+			t.Fatalf("got HTTP status %d, want %d", got, want)
+		}
+	}
+
+	{
+		got := page.Status
+		want := PageStatusError
+
+		if got != want {
+			t.Fatalf("got page status %q, want %q", got, want)
+		}
+	}
+}
+
+func TestAnalyze_BrokenLinkUsesLastRetryAttempt(t *testing.T) {
+	const mockedLinkURL = mockedBaseURL + "/flaky.css"
+
+	linkRequestsCount := 0
+	htmlBody := `<a href="/flaky.css">flaky css</a>`
+
+	mockedClient := &http.Client{
+		Transport: roundTripFunc(func(rq *http.Request) (*http.Response, error) {
+			switch rq.URL.String() {
+			case mockedBaseURL:
+				return newTestResponse(rq, http.StatusOK, "200 OK", htmlBody), nil
+			case mockedLinkURL:
+				linkRequestsCount++
+
+				if linkRequestsCount == 1 {
+					return newTestResponse(rq, http.StatusServiceUnavailable, "503 Service Unavailable", "try later"), nil
+				}
+
+				return newTestResponse(rq, http.StatusOK, "200 OK", "ok"), nil
+			default:
+				t.Fatalf("got unexpected request URL %q", rq.URL.String())
+				return nil, nil
+			}
+		}),
+	}
+
+	result, err := Analyze(context.Background(), Options{
+		URL:        mockedBaseURL,
+		Depth:      1,
+		Retries:    2,
+		Delay:      time.Nanosecond,
+		HTTPClient: mockedClient,
+	})
+	if err != nil {
+		t.Fatalf("got error %v, want nil", err)
+	}
+
+	{
+		got := linkRequestsCount
+		want := 2
+
+		if got != want {
+			t.Fatalf("got link requests count %d, want %d", got, want)
+		}
+	}
+
+	var report Report
+	if err := json.Unmarshal(result, &report); err != nil {
+		t.Fatalf("got unmarshal error %v, want nil", err)
+	}
+
+	page := report.Pages[0]
+
+	{
+		got := len(page.BrokenLinks)
+		want := 0
+
+		if got != want {
+			t.Fatalf("got broken links len %d, want %d", got, want)
+		}
 	}
 }

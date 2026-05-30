@@ -19,6 +19,8 @@ type crawlItem struct {
 	depth int
 }
 
+const defaultRetryDelay = time.Millisecond * 100
+
 // Analyze запускает обход сайта и возвращает JSON-отчёт.
 //
 // Функция начинает обход с opts.URL, загружает страницы до заданной глубины,
@@ -77,13 +79,11 @@ func Analyze(ctx context.Context, opts Options) ([]byte, error) {
 
 		for _, link := range extractInternalPageLinks(opts.URL, page.URL, body) {
 			key := pageKey(link)
-
 			if _, exists := seen[key]; exists {
 				continue
 			}
 
 			seen[key] = struct{}{}
-
 			queue = append(queue, crawlItem{
 				url:   link,
 				depth: nextDepth,
@@ -134,7 +134,7 @@ func analyzePage(
 		DiscoveredAt: discoveredAt,
 	}
 
-	rq, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
+	rs, err := getWithRetries(ctx, opts, limiter, pageURL)
 	if err != nil {
 		page.Status = PageStatusError
 		page.Error = err.Error()
@@ -142,24 +142,6 @@ func analyzePage(
 		return page, nil
 	}
 
-	if opts.UserAgent != "" {
-		rq.Header.Set("User-Agent", opts.UserAgent)
-	}
-
-	if err := limiter.Wait(ctx); err != nil {
-		page.Status = PageStatusError
-		page.Error = err.Error()
-
-		return page, nil
-	}
-
-	rs, err := opts.HTTPClient.Do(rq)
-	if err != nil {
-		page.Status = PageStatusError
-		page.Error = err.Error()
-
-		return page, nil
-	}
 	defer func() {
 		_ = rs.Body.Close()
 	}()
@@ -185,6 +167,105 @@ func analyzePage(
 	}
 
 	return page, body
+}
+
+func getWithRetries(
+	ctx context.Context,
+	opts Options,
+	limiter *requestLimiter,
+	rawURL string,
+) (*http.Response, error) {
+	retries := normalizeRetries(opts.Retries)
+
+	for attempt := 0; ; attempt++ {
+		rs, err := get(ctx, opts, limiter, rawURL)
+
+		if !shouldRetry(ctx, rs, err) || attempt >= retries {
+			return rs, err
+		}
+
+		closeResponseBody(rs)
+
+		if err := waitBeforeRetry(ctx, retryDelay(opts)); err != nil {
+			return nil, err
+		}
+	}
+}
+
+func get(
+	ctx context.Context,
+	opts Options,
+	limiter *requestLimiter,
+	rawURL string,
+) (*http.Response, error) {
+	rq, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if opts.UserAgent != "" {
+		rq.Header.Set("User-Agent", opts.UserAgent)
+	}
+
+	if err := limiter.Wait(ctx); err != nil {
+		return nil, err
+	}
+
+	return opts.HTTPClient.Do(rq)
+}
+
+func normalizeRetries(retries int) int {
+	if retries < 0 {
+		return 0
+	}
+
+	return retries
+}
+
+func shouldRetry(ctx context.Context, rs *http.Response, err error) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+
+	if err != nil {
+		return true
+	}
+
+	if rs == nil {
+		return false
+	}
+
+	return rs.StatusCode == http.StatusTooManyRequests ||
+		rs.StatusCode >= http.StatusInternalServerError
+}
+
+func retryDelay(opts Options) time.Duration {
+	if opts.Delay > 0 {
+		return opts.Delay
+	}
+
+	return defaultRetryDelay
+}
+
+func waitBeforeRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func closeResponseBody(rs *http.Response) {
+	if rs == nil || rs.Body == nil {
+		return
+	}
+
+	_, _ = io.Copy(io.Discard, rs.Body)
+	_ = rs.Body.Close()
 }
 
 func buildReport(opts Options, depth int, pages []PageReport, generatedAt string) ([]byte, error) {
@@ -235,7 +316,6 @@ func extractLinks(pageURL string, body []byte) []string {
 	seen := make(map[string]struct{})
 
 	var walk func(node *html.Node)
-
 	walk = func(node *html.Node) {
 		if node.Type == html.ElementNode {
 			for _, attr := range node.Attr {
@@ -284,6 +364,7 @@ func normalizeLink(baseURL *url.URL, rawLink string) (string, bool) {
 	}
 
 	resolvedLink := baseURL.ResolveReference(parsedLink)
+
 	if !isSupportedScheme(resolvedLink.Scheme) || resolvedLink.Host == "" {
 		return "", false
 	}
@@ -298,7 +379,7 @@ func isSupportedScheme(scheme string) bool {
 }
 
 func checkBrokenLink(ctx context.Context, opts Options, limiter *requestLimiter, link string) (BrokenLink, bool) {
-	rq, err := http.NewRequestWithContext(ctx, http.MethodGet, link, nil)
+	rs, err := getWithRetries(ctx, opts, limiter, link)
 	if err != nil {
 		return BrokenLink{
 			URL:   link,
@@ -306,21 +387,6 @@ func checkBrokenLink(ctx context.Context, opts Options, limiter *requestLimiter,
 		}, true
 	}
 
-	if opts.UserAgent != "" {
-		rq.Header.Set("User-Agent", opts.UserAgent)
-	}
-
-	if err := limiter.Wait(ctx); err != nil {
-		return BrokenLink{}, false
-	}
-
-	rs, err := opts.HTTPClient.Do(rq)
-	if err != nil {
-		return BrokenLink{
-			URL:   link,
-			Error: err.Error(),
-		}, true
-	}
 	defer func() {
 		_ = rs.Body.Close()
 	}()
@@ -357,7 +423,6 @@ func extractInternalPageLinks(rootPageURL string, pageURL string, body []byte) [
 	seen := make(map[string]struct{})
 
 	var walk func(node *html.Node)
-
 	walk = func(node *html.Node) {
 		if node.Type == html.ElementNode && strings.EqualFold(node.Data, "a") {
 			for _, attr := range node.Attr {
