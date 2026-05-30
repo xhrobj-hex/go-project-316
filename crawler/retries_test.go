@@ -364,3 +364,56 @@ func TestAnalyze_BrokenLinkUsesLastRetryAttempt(t *testing.T) {
 		}
 	}
 }
+
+// TestAnalyze_ContextCancelStopsRetries проверяет, что отмена контекста
+// не позволяет crawler выполнять дополнительные retry-попытки.
+func TestAnalyze_ContextCancelStopsRetries(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	requestsCount := 0
+
+	mockedClient := &http.Client{
+		Transport: roundTripFunc(func(rq *http.Request) (*http.Response, error) {
+			requestsCount++
+			cancel()
+
+			return newTestResponse(rq, http.StatusServiceUnavailable, "503 Service Unavailable", "try later"), nil
+		}),
+	}
+
+	result, err := Analyze(ctx, Options{
+		URL:        mockedBaseURL,
+		Depth:      1,
+		Retries:    2,
+		Delay:      time.Hour,
+		HTTPClient: mockedClient,
+	})
+	if err != nil {
+		t.Fatalf("got error %v, want nil", err)
+	}
+
+	{
+		got := requestsCount
+		want := 1
+
+		if got != want {
+			t.Fatalf("got requests count %d, want %d", got, want)
+		}
+	}
+
+	var report Report
+	if err := json.Unmarshal(result, &report); err != nil {
+		t.Fatalf("got unmarshal error %v, want nil", err)
+	}
+
+	page := report.Pages[0]
+
+	{
+		got := page.HTTPStatus
+		want := http.StatusServiceUnavailable
+
+		if got != want {
+			t.Fatalf("got HTTP status %d, want %d", got, want)
+		}
+	}
+}
