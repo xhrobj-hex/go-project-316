@@ -525,11 +525,12 @@ func extractInternalPageLinks(rootPageURL string, pageURL string, body []byte) [
 					continue
 				}
 
-				if _, exists := seen[link]; exists {
+				key := pageKey(link)
+				if _, exists := seen[key]; exists {
 					continue
 				}
 
-				seen[link] = struct{}{}
+				seen[key] = struct{}{}
 				links = append(links, link)
 			}
 		}
