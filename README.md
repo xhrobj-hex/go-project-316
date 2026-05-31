@@ -158,26 +158,26 @@ bin/hexlet-go-crawler --help
 
 ```json
 {
- "root_url": "https://irregularverbs.ru",
+ "root_url": "https://example.com",
  "depth": 1,
- "generated_at": "2026-05-31T12:45:45Z",
+ "generated_at": "2026-05-31T14:32:06Z",
  "pages": [
   {
-   "url": "https://irregularverbs.ru",
+   "url": "https://example.com",
    "depth": 0,
-   "http_status": 0,
-   "status": "error",
-   "error": "Get \"https://www.irregularverbs.ru/\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+   "http_status": 200,
+   "status": "ok",
+   "error": "",
    "seo": {
-    "has_title": false,
-    "title": "",
+    "has_title": true,
+    "title": "Example Domain",
     "has_description": false,
     "description": "",
-    "has_h1": false
+    "has_h1": true
    },
    "broken_links": [],
    "assets": [],
-   "discovered_at": "2026-05-31T12:45:45Z"
+   "discovered_at": "2026-05-31T14:32:06Z"
   }
  ]
 }

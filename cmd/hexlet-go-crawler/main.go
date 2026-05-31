@@ -16,7 +16,7 @@ func main() {
 	cmd := &cli.Command{
 		Name:      "hexlet-go-crawler",
 		Usage:     "analyze a website structure",
-		ArgsUsage: "",
+		ArgsUsage: "<url>",
 		Flags: []cli.Flag{
 			&cli.IntFlag{
 				Name:  "depth",
@@ -83,6 +83,9 @@ func main() {
 					Timeout: timeout,
 				},
 			})
+			if err != nil {
+				return err
+			}
 
 			if len(result) > 0 {
 				if _, err := os.Stdout.Write(result); err != nil {
@@ -94,7 +97,7 @@ func main() {
 				}
 			}
 
-			return err
+			return nil
 		},
 	}
 

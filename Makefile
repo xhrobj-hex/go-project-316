@@ -18,7 +18,7 @@ else
 endif
 
 run-iv:
-	go run ./cmd/hexlet-go-crawler URL="--depth=1 --retries=0 https://irregularverbs.ru"
+	go run ./cmd/hexlet-go-crawler --depth=1 --retries=0 https://www.irregularverbs.ru
 
 clean:
 	rm -f ./bin/hexlet-go-crawler
