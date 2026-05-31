@@ -188,7 +188,7 @@ func analyzePage(
 	if rs.StatusCode >= http.StatusOK && rs.StatusCode < http.StatusBadRequest {
 		page.Status = PageStatusOK
 		page.Assets = findAssets(ctx, opts, limiter, page.URL, body, resourceCache)
-		page.BrokenLinks = findBrokenLinks(ctx, opts, limiter, page.URL, body, resourceCache)
+		page.BrokenLinks = findBrokenLinks(ctx, opts, limiter, page.URL, body)
 	} else {
 		page.Status = PageStatusError
 		page.Error = rs.Status
@@ -203,10 +203,29 @@ func getWithRetries(
 	limiter *requestLimiter,
 	rawURL string,
 ) (*http.Response, error) {
+	return requestWithRetries(ctx, opts, limiter, http.MethodGet, rawURL)
+}
+
+func headWithRetries(
+	ctx context.Context,
+	opts Options,
+	limiter *requestLimiter,
+	rawURL string,
+) (*http.Response, error) {
+	return requestWithRetries(ctx, opts, limiter, http.MethodHead, rawURL)
+}
+
+func requestWithRetries(
+	ctx context.Context,
+	opts Options,
+	limiter *requestLimiter,
+	method string,
+	rawURL string,
+) (*http.Response, error) {
 	retries := normalizeRetries(opts.Retries)
 
 	for attempt := 0; ; attempt++ {
-		rs, err := get(ctx, opts, limiter, rawURL)
+		rs, err := request(ctx, opts, limiter, method, rawURL)
 		if !shouldRetry(ctx, rs, err) || attempt >= retries {
 			return rs, err
 		}
@@ -219,13 +238,14 @@ func getWithRetries(
 	}
 }
 
-func get(
+func request(
 	ctx context.Context,
 	opts Options,
 	limiter *requestLimiter,
+	method string,
 	rawURL string,
 ) (*http.Response, error) {
-	rq, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	rq, err := http.NewRequestWithContext(ctx, method, rawURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -323,7 +343,6 @@ func findBrokenLinks(
 	limiter *requestLimiter,
 	pageURL string,
 	body []byte,
-	resourceCache map[string]resourceInfo,
 ) []BrokenLink {
 	links := extractInternalPageLinks(opts.URL, pageURL, body)
 	brokenLinks := make([]BrokenLink, 0)
@@ -333,7 +352,7 @@ func findBrokenLinks(
 			break
 		}
 
-		brokenLink, ok := checkBrokenLink(ctx, opts, limiter, link, resourceCache)
+		brokenLink, ok := checkBrokenLink(ctx, opts, limiter, link)
 		if ok {
 			brokenLinks = append(brokenLinks, brokenLink)
 		}
@@ -406,9 +425,8 @@ func checkBrokenLink(
 	opts Options,
 	limiter *requestLimiter,
 	link string,
-	resourceCache map[string]resourceInfo,
 ) (BrokenLink, bool) {
-	info := getResourceInfo(ctx, opts, limiter, link, resourceCache)
+	info := getBrokenLinkInfo(ctx, opts, limiter, link)
 
 	if info.statusCode >= http.StatusBadRequest {
 		return BrokenLink{
@@ -426,6 +444,38 @@ func checkBrokenLink(
 	}
 
 	return BrokenLink{}, false
+}
+
+func getBrokenLinkInfo(
+	ctx context.Context,
+	opts Options,
+	limiter *requestLimiter,
+	rawURL string,
+) resourceInfo {
+	rs, err := headWithRetries(ctx, opts, limiter, rawURL)
+	if err != nil {
+		return resourceInfo{
+			error: err.Error(),
+		}
+	}
+
+	if rs.StatusCode == http.StatusMethodNotAllowed {
+		closeResponseBody(rs)
+
+		return fetchResourceInfo(ctx, opts, limiter, rawURL)
+	}
+
+	closeResponseBody(rs)
+
+	info := resourceInfo{
+		statusCode: rs.StatusCode,
+	}
+
+	if rs.StatusCode >= http.StatusBadRequest {
+		info.error = http.StatusText(rs.StatusCode)
+	}
+
+	return info
 }
 
 func getResourceInfo(
