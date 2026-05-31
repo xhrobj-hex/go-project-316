@@ -158,34 +158,73 @@ bin/hexlet-go-crawler --help
 
 ```json
 {
- "root_url": "https://example.com",
- "depth": 2,
- "generated_at": "2026-05-29T15:01:47Z",
+ "root_url": "https://irregularverbs.ru",
+ "depth": 1,
+ "generated_at": "2026-05-31T12:45:45Z",
  "pages": [
   {
-   "url": "https://example.com",
+   "url": "https://irregularverbs.ru",
    "depth": 0,
-   "http_status": 200,
-   "status": "ok",
-   "error": "",
-   "broken_links": [
-    {
-     "url": "https://iana.org/domains/example",
-     "error": "Get \"https://iana.org/domains/example\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)"
-    }
-   ],
-   "discovered_at": "2026-05-29T15:01:47Z",
+   "http_status": 0,
+   "status": "error",
+   "error": "Get \"https://www.irregularverbs.ru/\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
    "seo": {
-    "has_title": true,
-    "title": "Example Domain",
+    "has_title": false,
+    "title": "",
     "has_description": false,
     "description": "",
-    "has_h1": true
-   }
+    "has_h1": false
+   },
+   "broken_links": [],
+   "assets": [],
+   "discovered_at": "2026-05-31T12:45:45Z"
   }
  ]
 }
 ```
+
+## Поля отчёта
+
+### Общие поля
+
+- `root_url` - стартовый URL, переданный в crawler.
+- `depth` - глубина обхода после нормализации.
+- `generated_at` - время формирования отчёта в формате ISO8601/RFC3339.
+- `pages` - список найденных и проанализированных страниц.
+
+### Поля страницы
+
+- `url` - URL конкретной страницы.
+- `depth` - глубина страницы относительно стартового URL.
+- `http_status` - HTTP-статус страницы; `0`, если HTTP-ответ не был получен.
+- `status` - результат обработки страницы: `ok` или `error`.
+- `error` - текст ошибки; пустая строка, если ошибки нет.
+- `seo` - SEO-данные страницы.
+- `broken_links` - список недоступных ссылок, найденных на странице.
+- `assets` - список ассетов страницы.
+- `discovered_at` - время обнаружения страницы в формате ISO8601/RFC3339.
+
+### SEO-поля
+
+- `has_title` - найден ли тег `title`.
+- `title` - текст тега `title`.
+- `has_description` - найден ли meta description.
+- `description` - значение meta description.
+- `has_h1` - найден ли хотя бы один тег `h1`.
+
+### Поля битых ссылок
+
+- `url` - абсолютный URL недоступного ресурса.
+- `status_code` - HTTP-статус ресурса; `0`, если HTTP-ответ не был получен.
+- `error` - текст ошибки или описание HTTP-статуса.
+
+### Поля ассетов
+
+- `url` - абсолютный URL ассета.
+- `type` - тип ассета: `image`, `script`, `style` или `other`.
+- `status_code` - HTTP-статус ассета; `0`, если HTTP-ответ не был получен.
+- `size_bytes` - размер ассета в байтах.
+- `error` - текст ошибки; пустая строка, если ошибки нет.
 
 ## Архитектура
 

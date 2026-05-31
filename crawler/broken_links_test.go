@@ -132,7 +132,7 @@ func TestAnalyze_ReportsBrokenLinksFromHTMLPage(t *testing.T) {
 
 	{
 		got := page.BrokenLinks[0].Error
-		want := ""
+		want := "Not Found"
 		if got != want {
 			t.Fatalf("got broken link error %q, want %q", got, want)
 		}

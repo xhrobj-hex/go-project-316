@@ -51,7 +51,7 @@ func Analyze(ctx context.Context, opts Options) ([]byte, error) {
 		return nil, errors.New("http client is required")
 	}
 
-	generatedAt := time.Now().UTC().Format(time.RFC3339)
+	generatedAt := reportTime(opts).Format(time.RFC3339)
 	maxDepth := normalizeDepth(opts.Depth)
 	limiter := newRequestLimiter(opts)
 	resourceCache := make(map[string]resourceInfo)
@@ -114,6 +114,14 @@ func normalizeDepth(depth int) int {
 	return depth
 }
 
+func reportTime(opts Options) time.Time {
+	if opts.Now != nil {
+		return opts.Now().UTC()
+	}
+
+	return time.Now().UTC()
+}
+
 func pageKey(rawPageURL string) string {
 	parsedURL, err := url.Parse(rawPageURL)
 	if err != nil {
@@ -155,7 +163,6 @@ func analyzePage(
 
 		return page, nil
 	}
-
 	defer func() {
 		_ = rs.Body.Close()
 	}()
@@ -194,7 +201,6 @@ func getWithRetries(
 
 	for attempt := 0; ; attempt++ {
 		rs, err := get(ctx, opts, limiter, rawURL)
-
 		if !shouldRetry(ctx, rs, err) || attempt >= retries {
 			return rs, err
 		}
@@ -250,8 +256,7 @@ func shouldRetry(ctx context.Context, rs *http.Response, err error) bool {
 		return false
 	}
 
-	return rs.StatusCode == http.StatusTooManyRequests ||
-		rs.StatusCode >= http.StatusInternalServerError
+	return rs.StatusCode == http.StatusTooManyRequests || rs.StatusCode >= http.StatusInternalServerError
 }
 
 func retryDelay(opts Options) time.Duration {
@@ -376,6 +381,7 @@ func extractLinks(pageURL string, body []byte) []string {
 	seen := make(map[string]struct{})
 
 	var walk func(node *html.Node)
+
 	walk = func(node *html.Node) {
 		if node.Type == html.ElementNode {
 			for _, attr := range node.Attr {
@@ -424,7 +430,6 @@ func normalizeLink(baseURL *url.URL, rawLink string) (string, bool) {
 	}
 
 	resolvedLink := baseURL.ResolveReference(parsedLink)
-
 	if !isSupportedScheme(resolvedLink.Scheme) || resolvedLink.Host == "" {
 		return "", false
 	}
@@ -451,6 +456,7 @@ func checkBrokenLink(
 		return BrokenLink{
 			URL:        link,
 			StatusCode: info.statusCode,
+			Error:      http.StatusText(info.statusCode),
 		}, true
 	}
 
@@ -504,6 +510,7 @@ func fetchResourceInfo(
 	body, err := io.ReadAll(rs.Body)
 	if err != nil {
 		info.error = err.Error()
+
 		return info
 	}
 
@@ -544,6 +551,7 @@ func extractInternalPageLinks(rootPageURL string, pageURL string, body []byte) [
 	seen := make(map[string]struct{})
 
 	var walk func(node *html.Node)
+
 	walk = func(node *html.Node) {
 		if node.Type == html.ElementNode && strings.EqualFold(node.Data, "a") {
 			for _, attr := range node.Attr {
@@ -599,6 +607,7 @@ func extractAssets(pageURL string, body []byte) []assetCandidate {
 	seen := make(map[string]struct{})
 
 	var walk func(node *html.Node)
+
 	walk = func(node *html.Node) {
 		if node.Type == html.ElementNode {
 			assetType, rawURL, ok := assetFromNode(node)
@@ -631,14 +640,17 @@ func assetFromNode(node *html.Node) (string, string, bool) {
 	case "img":
 		src, ok := attrValue(node, "src")
 		src = strings.TrimSpace(src)
+
 		return AssetTypeImage, src, ok && src != ""
 	case "script":
 		src, ok := attrValue(node, "src")
 		src = strings.TrimSpace(src)
+
 		return AssetTypeScript, src, ok && src != ""
 	case "link":
 		href, ok := attrValue(node, "href")
 		href = strings.TrimSpace(href)
+
 		if !ok || href == "" {
 			return "", "", false
 		}
