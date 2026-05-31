@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sync"
 	"testing"
 )
 
@@ -156,12 +157,17 @@ func TestAnalyze_RequestsSameAssetOnceAcrossPages(t *testing.T) {
 	`
 
 	requestCounts := make(map[string]int)
+	var requestCountsMu sync.Mutex
 
 	client := &http.Client{
 		Transport: roundTripFunc(func(rq *http.Request) (*http.Response, error) {
-			requestCounts[rq.URL.String()]++
+			requestedURL := rq.URL.String()
 
-			switch rq.URL.String() {
+			requestCountsMu.Lock()
+			requestCounts[requestedURL]++
+			requestCountsMu.Unlock()
+
+			switch requestedURL {
 			case mockedRootURL:
 				return newTestResponse(rq, http.StatusOK, "200 OK", rootBody), nil
 			case mockedAboutURL:
@@ -171,7 +177,7 @@ func TestAnalyze_RequestsSameAssetOnceAcrossPages(t *testing.T) {
 				rs.ContentLength = int64(len(logoBody))
 				return rs, nil
 			default:
-				t.Fatalf("got unexpected request URL %q", rq.URL.String())
+				t.Fatalf("got unexpected request URL %q", requestedURL)
 				return nil, nil
 			}
 		}),
@@ -219,7 +225,10 @@ func TestAnalyze_RequestsSameAssetOnceAcrossPages(t *testing.T) {
 	}
 
 	{
+		requestCountsMu.Lock()
 		got := requestCounts[mockedLogoURL]
+		requestCountsMu.Unlock()
+
 		want := 1
 		if got != want {
 			t.Fatalf("got logo requests count %d, want %d", got, want)
