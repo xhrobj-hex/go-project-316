@@ -19,6 +19,17 @@ type crawlItem struct {
 	depth int
 }
 
+type assetCandidate struct {
+	url       string
+	assetType string
+}
+
+type resourceInfo struct {
+	statusCode int
+	sizeBytes  int64
+	error      string
+}
+
 const defaultRetryDelay = time.Millisecond * 100
 
 // Analyze запускает обход сайта и возвращает JSON-отчёт.
@@ -43,6 +54,7 @@ func Analyze(ctx context.Context, opts Options) ([]byte, error) {
 	generatedAt := time.Now().UTC().Format(time.RFC3339)
 	maxDepth := normalizeDepth(opts.Depth)
 	limiter := newRequestLimiter(opts)
+	resourceCache := make(map[string]resourceInfo)
 
 	queue := []crawlItem{
 		{
@@ -65,7 +77,7 @@ func Analyze(ctx context.Context, opts Options) ([]byte, error) {
 		item := queue[0]
 		queue = queue[1:]
 
-		page, body := analyzePage(ctx, opts, limiter, item.url, item.depth, generatedAt)
+		page, body := analyzePage(ctx, opts, limiter, item.url, item.depth, generatedAt, resourceCache)
 		pages = append(pages, page)
 
 		if page.Status != PageStatusOK {
@@ -126,11 +138,13 @@ func analyzePage(
 	pageURL string,
 	depth int,
 	discoveredAt string,
+	resourceCache map[string]resourceInfo,
 ) (PageReport, []byte) {
 	page := PageReport{
 		URL:          pageURL,
 		Depth:        depth,
 		BrokenLinks:  []BrokenLink{},
+		Assets:       []Asset{},
 		DiscoveredAt: discoveredAt,
 	}
 
@@ -160,7 +174,8 @@ func analyzePage(
 
 	if rs.StatusCode >= http.StatusOK && rs.StatusCode < http.StatusBadRequest {
 		page.Status = PageStatusOK
-		page.BrokenLinks = findBrokenLinks(ctx, opts, limiter, page.URL, body)
+		page.Assets = findAssets(ctx, opts, limiter, page.URL, body, resourceCache)
+		page.BrokenLinks = findBrokenLinks(ctx, opts, limiter, page.URL, body, resourceCache)
 	} else {
 		page.Status = PageStatusError
 		page.Error = rs.Status
@@ -291,7 +306,14 @@ func buildReport(opts Options, depth int, pages []PageReport, generatedAt string
 	return json.Marshal(report)
 }
 
-func findBrokenLinks(ctx context.Context, opts Options, limiter *requestLimiter, pageURL string, body []byte) []BrokenLink {
+func findBrokenLinks(
+	ctx context.Context,
+	opts Options,
+	limiter *requestLimiter,
+	pageURL string,
+	body []byte,
+	resourceCache map[string]resourceInfo,
+) []BrokenLink {
 	links := extractLinks(pageURL, body)
 	brokenLinks := make([]BrokenLink, 0)
 
@@ -300,13 +322,43 @@ func findBrokenLinks(ctx context.Context, opts Options, limiter *requestLimiter,
 			break
 		}
 
-		brokenLink, ok := checkBrokenLink(ctx, opts, limiter, link)
+		brokenLink, ok := checkBrokenLink(ctx, opts, limiter, link, resourceCache)
 		if ok {
 			brokenLinks = append(brokenLinks, brokenLink)
 		}
 	}
 
 	return brokenLinks
+}
+
+func findAssets(
+	ctx context.Context,
+	opts Options,
+	limiter *requestLimiter,
+	pageURL string,
+	body []byte,
+	resourceCache map[string]resourceInfo,
+) []Asset {
+	candidates := extractAssets(pageURL, body)
+	assets := make([]Asset, 0, len(candidates))
+
+	for _, candidate := range candidates {
+		if ctx.Err() != nil {
+			break
+		}
+
+		info := getResourceInfo(ctx, opts, limiter, candidate.url, resourceCache)
+
+		assets = append(assets, Asset{
+			URL:        candidate.url,
+			Type:       candidate.assetType,
+			StatusCode: info.statusCode,
+			SizeBytes:  info.sizeBytes,
+			Error:      info.error,
+		})
+	}
+
+	return assets
 }
 
 func extractLinks(pageURL string, body []byte) []string {
@@ -386,29 +438,90 @@ func isSupportedScheme(scheme string) bool {
 	return scheme == "http" || scheme == "https"
 }
 
-func checkBrokenLink(ctx context.Context, opts Options, limiter *requestLimiter, link string) (BrokenLink, bool) {
-	rs, err := getWithRetries(ctx, opts, limiter, link)
-	if err != nil {
+func checkBrokenLink(
+	ctx context.Context,
+	opts Options,
+	limiter *requestLimiter,
+	link string,
+	resourceCache map[string]resourceInfo,
+) (BrokenLink, bool) {
+	info := getResourceInfo(ctx, opts, limiter, link, resourceCache)
+
+	if info.statusCode >= http.StatusBadRequest {
 		return BrokenLink{
-			URL:   link,
-			Error: err.Error(),
+			URL:        link,
+			StatusCode: info.statusCode,
 		}, true
 	}
 
-	defer func() {
-		_ = rs.Body.Close()
-	}()
-
-	_, _ = io.Copy(io.Discard, rs.Body)
-
-	if rs.StatusCode >= http.StatusBadRequest {
+	if info.error != "" {
 		return BrokenLink{
-			URL:        link,
-			StatusCode: rs.StatusCode,
+			URL:   link,
+			Error: info.error,
 		}, true
 	}
 
 	return BrokenLink{}, false
+}
+
+func getResourceInfo(
+	ctx context.Context,
+	opts Options,
+	limiter *requestLimiter,
+	rawURL string,
+	resourceCache map[string]resourceInfo,
+) resourceInfo {
+	if info, exists := resourceCache[rawURL]; exists {
+		return info
+	}
+
+	info := fetchResourceInfo(ctx, opts, limiter, rawURL)
+	resourceCache[rawURL] = info
+
+	return info
+}
+
+func fetchResourceInfo(
+	ctx context.Context,
+	opts Options,
+	limiter *requestLimiter,
+	rawURL string,
+) resourceInfo {
+	rs, err := getWithRetries(ctx, opts, limiter, rawURL)
+	if err != nil {
+		return resourceInfo{
+			error: err.Error(),
+		}
+	}
+	defer func() {
+		_ = rs.Body.Close()
+	}()
+
+	info := resourceInfo{
+		statusCode: rs.StatusCode,
+	}
+
+	body, err := io.ReadAll(rs.Body)
+	if err != nil {
+		info.error = err.Error()
+		return info
+	}
+
+	info.sizeBytes = responseSize(rs, body)
+
+	if rs.StatusCode >= http.StatusBadRequest {
+		info.error = rs.Status
+	}
+
+	return info
+}
+
+func responseSize(rs *http.Response, body []byte) int64 {
+	if rs.ContentLength >= 0 {
+		return rs.ContentLength
+	}
+
+	return int64(len(body))
 }
 
 func extractInternalPageLinks(rootPageURL string, pageURL string, body []byte) []string {
@@ -469,4 +582,107 @@ func extractInternalPageLinks(rootPageURL string, pageURL string, body []byte) [
 	walk(document)
 
 	return links
+}
+
+func extractAssets(pageURL string, body []byte) []assetCandidate {
+	baseURL, err := url.Parse(pageURL)
+	if err != nil {
+		return nil
+	}
+
+	document, err := html.Parse(bytes.NewReader(body))
+	if err != nil {
+		return nil
+	}
+
+	assets := make([]assetCandidate, 0)
+	seen := make(map[string]struct{})
+
+	var walk func(node *html.Node)
+	walk = func(node *html.Node) {
+		if node.Type == html.ElementNode {
+			assetType, rawURL, ok := assetFromNode(node)
+			if ok {
+				link, ok := normalizeLink(baseURL, rawURL)
+				if ok {
+					if _, exists := seen[link]; !exists {
+						seen[link] = struct{}{}
+						assets = append(assets, assetCandidate{
+							url:       link,
+							assetType: assetType,
+						})
+					}
+				}
+			}
+		}
+
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			walk(child)
+		}
+	}
+
+	walk(document)
+
+	return assets
+}
+
+func assetFromNode(node *html.Node) (string, string, bool) {
+	switch strings.ToLower(node.Data) {
+	case "img":
+		src, ok := attrValue(node, "src")
+		src = strings.TrimSpace(src)
+		return AssetTypeImage, src, ok && src != ""
+	case "script":
+		src, ok := attrValue(node, "src")
+		src = strings.TrimSpace(src)
+		return AssetTypeScript, src, ok && src != ""
+	case "link":
+		href, ok := attrValue(node, "href")
+		href = strings.TrimSpace(href)
+		if !ok || href == "" {
+			return "", "", false
+		}
+
+		if hasRel(node, "stylesheet") {
+			return AssetTypeStyle, href, true
+		}
+
+		if hasIconRel(node) {
+			return AssetTypeOther, href, true
+		}
+
+		return "", "", false
+	default:
+		return "", "", false
+	}
+}
+
+func hasRel(node *html.Node, value string) bool {
+	rel, ok := attrValue(node, "rel")
+	if !ok {
+		return false
+	}
+
+	for _, part := range strings.Fields(strings.ToLower(rel)) {
+		if part == value {
+			return true
+		}
+	}
+
+	return false
+}
+
+func hasIconRel(node *html.Node) bool {
+	rel, ok := attrValue(node, "rel")
+	if !ok {
+		return false
+	}
+
+	for _, part := range strings.Fields(strings.ToLower(rel)) {
+		if part == "icon" || strings.HasSuffix(part, "-icon") {
+			return true
+		}
+	}
+
+	return false
 }
