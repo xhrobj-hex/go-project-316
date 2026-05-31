@@ -493,13 +493,6 @@ func fetchResourceInfo(
 			error: err.Error(),
 		}
 	}
-
-	if rs == nil || rs.Body == nil {
-		return resourceInfo{
-			error: "empty response",
-		}
-	}
-
 	defer func() {
 		_ = rs.Body.Close()
 	}()
@@ -646,10 +639,19 @@ func assetFromNode(node *html.Node) (string, string, bool) {
 	case "link":
 		href, ok := attrValue(node, "href")
 		href = strings.TrimSpace(href)
-		if !ok || href == "" || !hasRel(node, "stylesheet") {
+		if !ok || href == "" {
 			return "", "", false
 		}
-		return AssetTypeStyle, href, true
+
+		if hasRel(node, "stylesheet") {
+			return AssetTypeStyle, href, true
+		}
+
+		if hasIconRel(node) {
+			return AssetTypeOther, href, true
+		}
+
+		return "", "", false
 	default:
 		return "", "", false
 	}
@@ -663,6 +665,21 @@ func hasRel(node *html.Node, value string) bool {
 
 	for _, part := range strings.Fields(strings.ToLower(rel)) {
 		if part == value {
+			return true
+		}
+	}
+
+	return false
+}
+
+func hasIconRel(node *html.Node) bool {
+	rel, ok := attrValue(node, "rel")
+	if !ok {
+		return false
+	}
+
+	for _, part := range strings.Fields(strings.ToLower(rel)) {
+		if part == "icon" || strings.HasSuffix(part, "-icon") {
 			return true
 		}
 	}

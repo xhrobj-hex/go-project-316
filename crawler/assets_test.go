@@ -405,3 +405,78 @@ func TestAnalyze_ReportsFailedAsset(t *testing.T) {
 		}
 	}
 }
+
+// TestAnalyze_ReportsFaviconAsOtherAsset проверяет, что favicon из link rel="icon"
+// попадает в отчет как ассет типа other.
+func TestAnalyze_ReportsFaviconAsOtherAsset(t *testing.T) {
+	const (
+		mockedPageURL    = mockedBaseURL + "/index.html"
+		mockedFaviconURL = mockedBaseURL + "/favicon.ico"
+	)
+
+	faviconBody := "ico"
+
+	htmlBody := `
+		<!doctype html>
+		<html>
+		<head>
+			<link rel="icon" href="/favicon.ico">
+		</head>
+		<body></body>
+		</html>
+	`
+
+	client := &http.Client{
+		Transport: roundTripFunc(func(rq *http.Request) (*http.Response, error) {
+			switch rq.URL.String() {
+			case mockedPageURL:
+				return newTestResponse(rq, http.StatusOK, "200 OK", htmlBody), nil
+			case mockedFaviconURL:
+				rs := newTestResponse(rq, http.StatusOK, "200 OK", faviconBody)
+				rs.ContentLength = int64(len(faviconBody))
+				return rs, nil
+			default:
+				t.Fatalf("got unexpected request URL %q", rq.URL.String())
+				return nil, nil
+			}
+		}),
+	}
+
+	result, err := Analyze(context.Background(), Options{
+		URL:        mockedPageURL,
+		Depth:      1,
+		HTTPClient: client,
+	})
+	if err != nil {
+		t.Fatalf("got error %v, want nil", err)
+	}
+
+	var report Report
+	if err := json.Unmarshal(result, &report); err != nil {
+		t.Fatalf("got unmarshal error %v, want nil", err)
+	}
+
+	page := report.Pages[0]
+
+	{
+		got := len(page.Assets)
+		want := 1
+		if got != want {
+			t.Fatalf("got assets len %d, want %d", got, want)
+		}
+	}
+
+	{
+		got := page.Assets[0]
+		want := Asset{
+			URL:        mockedFaviconURL,
+			Type:       AssetTypeOther,
+			StatusCode: http.StatusOK,
+			SizeBytes:  int64(len(faviconBody)),
+			Error:      "",
+		}
+		if got != want {
+			t.Fatalf("got asset %+v, want %+v", got, want)
+		}
+	}
+}
