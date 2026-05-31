@@ -137,6 +137,13 @@ func pageKey(rawPageURL string) string {
 		parsedURL.Path = "/"
 	}
 
+	if parsedURL.Path != "/" {
+		parsedURL.Path = strings.TrimRight(parsedURL.Path, "/")
+		if parsedURL.Path == "" {
+			parsedURL.Path = "/"
+		}
+	}
+
 	return parsedURL.String()
 }
 
