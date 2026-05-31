@@ -25,8 +25,8 @@ const (
 // BrokenLink описывает ссылку на недоступный ресурс.
 type BrokenLink struct {
 	URL        string `json:"url"`
-	StatusCode int    `json:"status_code,omitempty"`
-	Error      string `json:"error,omitempty"`
+	StatusCode int    `json:"status_code"`
+	Error      string `json:"error"`
 }
 
 // Asset описывает внешний ресурс страницы: изображение, скрипт, стиль или другой ассет.
@@ -54,10 +54,10 @@ type PageReport struct {
 	HTTPStatus   int          `json:"http_status"`
 	Status       string       `json:"status"`
 	Error        string       `json:"error"`
+	SEO          SEOReport    `json:"seo"`
 	BrokenLinks  []BrokenLink `json:"broken_links"`
 	Assets       []Asset      `json:"assets"`
 	DiscoveredAt string       `json:"discovered_at"`
-	SEO          SEOReport    `json:"seo"`
 }
 
 // Report описывает итоговый отчет по результатам обхода сайта.

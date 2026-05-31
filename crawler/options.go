@@ -39,4 +39,8 @@ type Options struct {
 
 	// HTTPClient выполняет HTTP-запросы во время обхода сайта.
 	HTTPClient *http.Client
+
+	// Now задаёт источник времени для generated_at и discovered_at.
+	// Если nil, используется текущее время.
+	Now func() time.Time
 }

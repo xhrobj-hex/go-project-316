@@ -12,28 +12,6 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
-// Пример справки утилиты:
-
-// bin/hexlet-go-crawler --help
-// NAME:
-//    hexlet-go-crawler - analyze a website structure
-
-// USAGE:
-//    hexlet-go-crawler [global options] command [command options] <url>
-
-// COMMANDS:
-//    help, h  Shows a list of commands or help for one command
-
-// GLOBAL OPTIONS:
-//    --depth value       crawl depth (default: 10)
-//    --retries value     number of retries for failed requests (default: 1)
-//    --delay value       delay between requests (example: 200ms, 1s) (default: 0s)
-//    --timeout value     per-request timeout (default: 15s)
-//    --rps value         limit requests per second (overrides delay) (default: 0)
-//    --user-agent value  custom user agent
-//    --workers value     number of concurrent workers (default: 4)
-//    --help, -h          show help
-
 func main() {
 	cmd := &cli.Command{
 		Name:      "hexlet-go-crawler",
@@ -81,6 +59,7 @@ func main() {
 				if _, err := fmt.Fprintln(os.Stdout, "URL is required"); err != nil {
 					return err
 				}
+
 				if _, err := fmt.Fprintln(os.Stdout); err != nil {
 					return err
 				}
@@ -104,13 +83,21 @@ func main() {
 					Timeout: timeout,
 				},
 			})
+			if err != nil {
+				return err
+			}
+
 			if len(result) > 0 {
-				if _, err := fmt.Fprintln(os.Stdout, string(result)); err != nil {
+				if _, err := os.Stdout.Write(result); err != nil {
+					return err
+				}
+
+				if _, err := os.Stdout.Write([]byte("\n")); err != nil {
 					return err
 				}
 			}
 
-			return err
+			return nil
 		},
 	}
 

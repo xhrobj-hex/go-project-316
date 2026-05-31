@@ -1,4 +1,4 @@
-.PHONY: build test lint run clean
+.PHONY: build test lint run run-iv clean
 
 build:
 	mkdir -p bin
@@ -16,6 +16,9 @@ ifndef URL
 else
 	go run ./cmd/hexlet-go-crawler $(URL)
 endif
+
+run-iv:
+	go run ./cmd/hexlet-go-crawler --depth=1 --retries=0 https://www.irregularverbs.ru
 
 clean:
 	rm -f ./bin/hexlet-go-crawler

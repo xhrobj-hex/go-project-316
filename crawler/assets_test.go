@@ -398,8 +398,8 @@ func TestAnalyze_ReportsFailedAsset(t *testing.T) {
 	}
 
 	{
-		got := asset.Error
-		want := "404 Not Found"
+		got := page.Assets[0].Error
+		want := "Not Found"
 		if got != want {
 			t.Fatalf("got asset error %q, want %q", got, want)
 		}
