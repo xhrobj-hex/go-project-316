@@ -517,7 +517,7 @@ func fetchResourceInfo(
 	info.sizeBytes = responseSize(rs, body)
 
 	if rs.StatusCode >= http.StatusBadRequest {
-		info.error = rs.Status
+		info.error = http.StatusText(rs.StatusCode)
 	}
 
 	return info

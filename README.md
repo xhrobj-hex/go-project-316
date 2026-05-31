@@ -160,7 +160,7 @@ bin/hexlet-go-crawler --help
 {
  "root_url": "https://example.com",
  "depth": 1,
- "generated_at": "2026-05-31T14:32:06Z",
+ "generated_at": "2026-05-31T14:41:21Z",
  "pages": [
   {
    "url": "https://example.com",
@@ -177,7 +177,7 @@ bin/hexlet-go-crawler --help
    },
    "broken_links": [],
    "assets": [],
-   "discovered_at": "2026-05-31T14:32:06Z"
+   "discovered_at": "2026-05-31T14:41:21Z"
   }
  ]
 }
