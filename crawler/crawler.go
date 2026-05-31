@@ -499,7 +499,9 @@ func extractInternalPageLinks(rootPageURL string, pageURL string, body []byte) [
 	}
 
 	links := make([]string, 0)
-	seen := make(map[string]struct{})
+	seen := map[string]struct{}{
+		pageKey(pageURL): {},
+	}
 
 	var walk func(node *html.Node)
 
