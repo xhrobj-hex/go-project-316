@@ -10,13 +10,16 @@ import (
 )
 
 // TestAnalyze_ReportsBrokenLinksFromHTMLPage проверяет, что crawler добавляет
-// в отчет только недоступные ссылки и игнорирует пустые, якорные и неподдерживаемые ссылки.
+// в отчет только недоступные ссылки из тегов a и игнорирует пустые, якорные,
+// неподдерживаемые ссылки и ассеты.
 func TestAnalyze_ReportsBrokenLinksFromHTMLPage(t *testing.T) {
 	const (
 		mockedPageURL         = mockedBaseURL + "/blog/index.html"
 		mockedAppCSSURL       = mockedBaseURL + "/assets/app.css"
 		mockedGhostCSSURL     = mockedBaseURL + "/assets/ghost.css"
 		mockedBlogPostURL     = mockedBaseURL + "/blog/post.html"
+		mockedMissingPostURL  = mockedBaseURL + "/blog/missing.html"
+		mockedNetworkPostURL  = mockedBaseURL + "/blog/network-error.html"
 		mockedMissingImageURL = mockedBaseURL + "/images/missing.png"
 	)
 
@@ -29,6 +32,8 @@ func TestAnalyze_ReportsBrokenLinksFromHTMLPage(t *testing.T) {
 			</head>
 			<body>
 				<a href="/blog/post.html">working link</a>
+				<a href="/blog/missing.html">missing link</a>
+				<a href="/blog/network-error.html">network error link</a>
 				<img src="/images/missing.png">
 				<a href="">empty link</a>
 				<a href="#content">anchor link</a>
@@ -45,12 +50,16 @@ func TestAnalyze_ReportsBrokenLinksFromHTMLPage(t *testing.T) {
 				return newTestResponse(rq, http.StatusOK, "200 OK", htmlBody), nil
 			case mockedAppCSSURL:
 				return newTestResponse(rq, http.StatusOK, "200 OK", "ok"), nil
-			case mockedBlogPostURL:
-				return newTestResponse(rq, http.StatusOK, "200 OK", "ok"), nil
 			case mockedGhostCSSURL:
 				return newTestResponse(rq, http.StatusNotFound, "404 Not Found", "not found"), nil
-			case mockedMissingImageURL:
+			case mockedBlogPostURL:
+				return newTestResponse(rq, http.StatusOK, "200 OK", "ok"), nil
+			case mockedMissingPostURL:
+				return newTestResponse(rq, http.StatusNotFound, "404 Not Found", "not found"), nil
+			case mockedNetworkPostURL:
 				return nil, errors.New("network is down")
+			case mockedMissingImageURL:
+				return nil, errors.New("image network is down")
 			default:
 				t.Fatalf("got unexpected request URL %q", rq.URL.String())
 				return nil, nil
@@ -116,7 +125,7 @@ func TestAnalyze_ReportsBrokenLinksFromHTMLPage(t *testing.T) {
 
 	{
 		got := page.BrokenLinks[0].URL
-		want := mockedGhostCSSURL
+		want := mockedMissingPostURL
 		if got != want {
 			t.Fatalf("got broken link URL %q, want %q", got, want)
 		}
@@ -140,7 +149,7 @@ func TestAnalyze_ReportsBrokenLinksFromHTMLPage(t *testing.T) {
 
 	{
 		got := page.BrokenLinks[1].URL
-		want := mockedMissingImageURL
+		want := mockedNetworkPostURL
 		if got != want {
 			t.Fatalf("got broken link URL %q, want %q", got, want)
 		}

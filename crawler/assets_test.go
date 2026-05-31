@@ -86,10 +86,10 @@ func TestAnalyze_ReportsAssetsFromHTMLPage(t *testing.T) {
 	{
 		got := page.Assets[0]
 		want := Asset{
-			URL:        mockedCSSURL,
-			Type:       AssetTypeStyle,
+			URL:        mockedLogoURL,
+			Type:       AssetTypeImage,
 			StatusCode: http.StatusOK,
-			SizeBytes:  int64(len(cssBody)),
+			SizeBytes:  int64(len(logoBody)),
 			Error:      "",
 		}
 		if got != want {
@@ -114,10 +114,10 @@ func TestAnalyze_ReportsAssetsFromHTMLPage(t *testing.T) {
 	{
 		got := page.Assets[2]
 		want := Asset{
-			URL:        mockedLogoURL,
-			Type:       AssetTypeImage,
+			URL:        mockedCSSURL,
+			Type:       AssetTypeStyle,
 			StatusCode: http.StatusOK,
-			SizeBytes:  int64(len(logoBody)),
+			SizeBytes:  int64(len(cssBody)),
 			Error:      "",
 		}
 		if got != want {

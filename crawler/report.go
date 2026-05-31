@@ -35,7 +35,7 @@ type Asset struct {
 	Type       string `json:"type"`
 	StatusCode int    `json:"status_code"`
 	SizeBytes  int64  `json:"size_bytes"`
-	Error      string `json:"error"`
+	Error      string `json:"error,omitempty"`
 }
 
 // SEOReport содержит SEO-данные, извлеченные со страницы.
@@ -53,7 +53,7 @@ type PageReport struct {
 	Depth        int          `json:"depth"`
 	HTTPStatus   int          `json:"http_status"`
 	Status       string       `json:"status"`
-	Error        string       `json:"error"`
+	Error        string       `json:"error,omitempty"`
 	SEO          SEOReport    `json:"seo"`
 	BrokenLinks  []BrokenLink `json:"broken_links"`
 	Assets       []Asset      `json:"assets"`

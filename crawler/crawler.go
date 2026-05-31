@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -151,8 +152,6 @@ func analyzePage(
 	page := PageReport{
 		URL:          pageURL,
 		Depth:        depth,
-		BrokenLinks:  []BrokenLink{},
-		Assets:       []Asset{},
 		DiscoveredAt: discoveredAt,
 	}
 
@@ -383,24 +382,16 @@ func extractLinks(pageURL string, body []byte) []string {
 	var walk func(node *html.Node)
 
 	walk = func(node *html.Node) {
-		if node.Type == html.ElementNode {
-			for _, attr := range node.Attr {
-				key := strings.ToLower(attr.Key)
-				if key != "href" && key != "src" {
-					continue
+		if node.Type == html.ElementNode && strings.EqualFold(node.Data, "a") {
+			rawLink, ok := attrValue(node, "href")
+			if ok {
+				link, ok := normalizeLink(baseURL, rawLink)
+				if ok {
+					if _, exists := seen[link]; !exists {
+						seen[link] = struct{}{}
+						links = append(links, link)
+					}
 				}
-
-				link, ok := normalizeLink(baseURL, attr.Val)
-				if !ok {
-					continue
-				}
-
-				if _, exists := seen[link]; exists {
-					continue
-				}
-
-				seen[link] = struct{}{}
-				links = append(links, link)
 			}
 		}
 
@@ -410,6 +401,7 @@ func extractLinks(pageURL string, body []byte) []string {
 	}
 
 	walk(document)
+	sort.Strings(links)
 
 	return links
 }
@@ -588,6 +580,7 @@ func extractInternalPageLinks(rootPageURL string, pageURL string, body []byte) [
 	}
 
 	walk(document)
+	sort.Strings(links)
 
 	return links
 }
@@ -632,7 +625,33 @@ func extractAssets(pageURL string, body []byte) []assetCandidate {
 
 	walk(document)
 
+	sort.SliceStable(assets, func(i, j int) bool {
+		leftRank := assetTypeRank(assets[i].assetType)
+		rightRank := assetTypeRank(assets[j].assetType)
+
+		if leftRank != rightRank {
+			return leftRank < rightRank
+		}
+
+		return assets[i].url < assets[j].url
+	})
+
 	return assets
+}
+
+func assetTypeRank(assetType string) int {
+	switch assetType {
+	case AssetTypeImage:
+		return 0
+	case AssetTypeScript:
+		return 1
+	case AssetTypeStyle:
+		return 2
+	case AssetTypeOther:
+		return 3
+	default:
+		return 4
+	}
 }
 
 func assetFromNode(node *html.Node) (string, string, bool) {

@@ -9,16 +9,20 @@ import (
 	"time"
 )
 
+// TestAnalyze_ReturnsExpectedJSONContract проверяет, что Analyze возвращает
+// JSON-отчёт с ожидаемым набором полей, порядком ключей и значениями.
 func TestAnalyze_ReturnsExpectedJSONContract(t *testing.T) {
 	result := analyzeJSONContractFixture(t, false)
 
-	want := `{"root_url":"https://example.com","depth":1,"generated_at":"2024-06-01T12:34:56Z","pages":[{"url":"https://example.com","depth":0,"http_status":200,"status":"ok","error":"","seo":{"has_title":true,"title":"Example title","has_description":true,"description":"Example description","has_h1":true},"broken_links":[{"url":"https://example.com/missing","status_code":404,"error":"Not Found"}],"assets":[{"url":"https://example.com/static/logo.png","type":"image","status_code":200,"size_bytes":12345,"error":""}],"discovered_at":"2024-06-01T12:34:56Z"}]}`
+	want := `{"root_url":"https://example.com","depth":1,"generated_at":"2024-06-01T12:34:56Z","pages":[{"url":"https://example.com","depth":0,"http_status":200,"status":"ok","seo":{"has_title":true,"title":"Example title","has_description":true,"description":"Example description","has_h1":true},"broken_links":[{"url":"https://example.com/missing","status_code":404,"error":"Not Found"}],"assets":[{"url":"https://example.com/static/logo.png","type":"image","status_code":200,"size_bytes":12345}],"discovered_at":"2024-06-01T12:34:56Z"}]}`
 
 	if string(result) != want {
 		t.Fatalf("got JSON:\n%s\nwant:\n%s", result, want)
 	}
 }
 
+// TestAnalyze_IndentJSONChangesOnlyFormatting проверяет, что IndentJSON
+// меняет только форматирование JSON, но не его содержимое.
 func TestAnalyze_IndentJSONChangesOnlyFormatting(t *testing.T) {
 	compact := analyzeJSONContractFixture(t, false)
 	indented := analyzeJSONContractFixture(t, true)
@@ -37,6 +41,8 @@ func TestAnalyze_IndentJSONChangesOnlyFormatting(t *testing.T) {
 	}
 }
 
+// analyzeJSONContractFixture запускает Analyze на фиксированной HTML-странице
+// и возвращает JSON-отчёт для проверки контракта.
 func analyzeJSONContractFixture(t *testing.T, indentJSON bool) []byte {
 	t.Helper()
 
