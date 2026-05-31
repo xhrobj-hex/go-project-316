@@ -520,7 +520,8 @@ func extractInternalPageLinks(rootPageURL string, pageURL string, body []byte) [
 					continue
 				}
 
-				if !strings.EqualFold(parsedLink.Host, rootURL.Host) {
+				if !strings.EqualFold(parsedLink.Scheme, rootURL.Scheme) ||
+					!strings.EqualFold(parsedLink.Host, rootURL.Host) {
 					continue
 				}
 
