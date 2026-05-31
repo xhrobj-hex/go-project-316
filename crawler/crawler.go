@@ -318,7 +318,7 @@ func findBrokenLinks(
 	body []byte,
 	resourceCache map[string]resourceInfo,
 ) []BrokenLink {
-	links := extractLinks(pageURL, body)
+	links := extractInternalPageLinks(opts.URL, pageURL, body)
 	brokenLinks := make([]BrokenLink, 0)
 
 	for _, link := range links {
@@ -363,47 +363,6 @@ func findAssets(
 	}
 
 	return assets
-}
-
-func extractLinks(pageURL string, body []byte) []string {
-	baseURL, err := url.Parse(pageURL)
-	if err != nil {
-		return nil
-	}
-
-	document, err := html.Parse(bytes.NewReader(body))
-	if err != nil {
-		return nil
-	}
-
-	links := make([]string, 0)
-	seen := make(map[string]struct{})
-
-	var walk func(node *html.Node)
-
-	walk = func(node *html.Node) {
-		if node.Type == html.ElementNode && strings.EqualFold(node.Data, "a") {
-			rawLink, ok := attrValue(node, "href")
-			if ok {
-				link, ok := normalizeLink(baseURL, rawLink)
-				if ok {
-					if _, exists := seen[link]; !exists {
-						seen[link] = struct{}{}
-						links = append(links, link)
-					}
-				}
-			}
-		}
-
-		for child := node.FirstChild; child != nil; child = child.NextSibling {
-			walk(child)
-		}
-	}
-
-	walk(document)
-	sort.Strings(links)
-
-	return links
 }
 
 func normalizeLink(baseURL *url.URL, rawLink string) (string, bool) {
