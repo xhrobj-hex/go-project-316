@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/net/html"
@@ -23,6 +24,17 @@ type crawlItem struct {
 type assetCandidate struct {
 	url       string
 	assetType string
+}
+
+type linkCheckJob struct {
+	index int
+	url   string
+}
+
+type brokenLinkResult struct {
+	index      int
+	brokenLink BrokenLink
+	ok         bool
 }
 
 type resourceInfo struct {
@@ -97,6 +109,7 @@ func Analyze(ctx context.Context, opts Options) ([]byte, error) {
 			}
 
 			seen[key] = struct{}{}
+
 			queue = append(queue, crawlItem{
 				url:   link,
 				depth: nextDepth,
@@ -113,6 +126,14 @@ func normalizeDepth(depth int) int {
 	}
 
 	return depth
+}
+
+func normalizeConcurrency(concurrency int) int {
+	if concurrency < 1 {
+		return 1
+	}
+
+	return concurrency
 }
 
 func reportTime(opts Options) time.Time {
@@ -331,7 +352,7 @@ func buildReport(opts Options, depth int, pages []PageReport, generatedAt string
 	}
 
 	if opts.IndentJSON {
-		return json.MarshalIndent(report, "", " ")
+		return json.MarshalIndent(report, "", "  ")
 	}
 
 	return json.Marshal(report)
@@ -345,16 +366,69 @@ func findBrokenLinks(
 	body []byte,
 ) []BrokenLink {
 	links := extractInternalPageLinks(opts.URL, pageURL, body)
-	brokenLinks := make([]BrokenLink, 0)
+	if len(links) == 0 {
+		return []BrokenLink{}
+	}
 
-	for _, link := range links {
-		if ctx.Err() != nil {
-			break
+	workers := normalizeConcurrency(opts.Concurrency)
+	if workers > len(links) {
+		workers = len(links)
+	}
+
+	jobs := make(chan linkCheckJob)
+	results := make(chan brokenLinkResult, len(links))
+
+	var wg sync.WaitGroup
+
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			for job := range jobs {
+				if ctx.Err() != nil {
+					continue
+				}
+
+				brokenLink, ok := checkBrokenLink(ctx, opts, limiter, job.url)
+				results <- brokenLinkResult{
+					index:      job.index,
+					brokenLink: brokenLink,
+					ok:         ok,
+				}
+			}
+		}()
+	}
+
+	go func() {
+		defer close(jobs)
+
+		for index, link := range links {
+			if ctx.Err() != nil {
+				return
+			}
+
+			select {
+			case <-ctx.Done():
+				return
+			case jobs <- linkCheckJob{index: index, url: link}:
+			}
 		}
+	}()
 
-		brokenLink, ok := checkBrokenLink(ctx, opts, limiter, link)
-		if ok {
-			brokenLinks = append(brokenLinks, brokenLink)
+	wg.Wait()
+	close(results)
+
+	checkedLinks := make([]brokenLinkResult, len(links))
+	for result := range results {
+		checkedLinks[result.index] = result
+	}
+
+	brokenLinks := make([]BrokenLink, 0)
+	for _, result := range checkedLinks {
+		if result.ok {
+			brokenLinks = append(brokenLinks, result.brokenLink)
 		}
 	}
 
@@ -556,6 +630,7 @@ func extractInternalPageLinks(rootPageURL string, pageURL string, body []byte) [
 	}
 
 	links := make([]string, 0)
+
 	seen := map[string]struct{}{
 		pageKey(pageURL): {},
 	}
@@ -600,6 +675,7 @@ func extractInternalPageLinks(rootPageURL string, pageURL string, body []byte) [
 	}
 
 	walk(document)
+
 	sort.Strings(links)
 
 	return links
@@ -629,6 +705,7 @@ func extractAssets(pageURL string, body []byte) []assetCandidate {
 				if ok {
 					if _, exists := seen[link]; !exists {
 						seen[link] = struct{}{}
+
 						assets = append(assets, assetCandidate{
 							url:       link,
 							assetType: assetType,
@@ -648,7 +725,6 @@ func extractAssets(pageURL string, body []byte) []assetCandidate {
 	sort.SliceStable(assets, func(i, j int) bool {
 		leftRank := assetTypeRank(assets[i].assetType)
 		rightRank := assetTypeRank(assets[j].assetType)
-
 		if leftRank != rightRank {
 			return leftRank < rightRank
 		}
@@ -689,7 +765,6 @@ func assetFromNode(node *html.Node) (string, string, bool) {
 	case "link":
 		href, ok := attrValue(node, "href")
 		href = strings.TrimSpace(href)
-
 		if !ok || href == "" {
 			return "", "", false
 		}
