@@ -1,4 +1,4 @@
-.PHONY: build test lint run run-iv clean
+.PHONY: build test test-race lint run run-iv clean
 
 build:
 	mkdir -p bin
@@ -6,6 +6,9 @@ build:
 
 test:
 	go test ./...
+
+test-race:
+	go test ./... -race -count=1
 
 lint:
 	golangci-lint run
