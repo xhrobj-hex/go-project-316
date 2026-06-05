@@ -2,12 +2,14 @@ package crawler
 
 import (
 	"context"
+	"sync"
 	"time"
 )
 
 type waitForDurationFunc func(ctx context.Context, delay time.Duration) error
 
 type requestLimiter struct {
+	mu           sync.Mutex
 	interval     time.Duration
 	wait         waitForDurationFunc
 	firstRequest bool
@@ -38,6 +40,9 @@ func requestInterval(opts Options) time.Duration {
 }
 
 func (limiter *requestLimiter) Wait(ctx context.Context) error {
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+
 	if err := ctx.Err(); err != nil {
 		return err
 	}
