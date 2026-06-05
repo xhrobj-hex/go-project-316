@@ -287,8 +287,6 @@ func analyzePage(
 		URL:          pageURL,
 		Depth:        depth,
 		DiscoveredAt: discoveredAt,
-		Assets:       []Asset{},
-		BrokenLinks:  []BrokenLink{},
 	}
 
 	rs, err := getWithRetries(ctx, opts, limiter, pageURL)
