@@ -21,26 +21,32 @@ type crawlItem struct {
 	depth int
 }
 
+type crawlJob struct {
+	index int
+	item  crawlItem
+}
+
+type crawlPageResult struct {
+	index int
+	item  crawlItem
+	page  PageReport
+	body  []byte
+}
+
 type assetCandidate struct {
 	url       string
 	assetType string
-}
-
-type linkCheckJob struct {
-	index int
-	url   string
-}
-
-type brokenLinkResult struct {
-	index      int
-	brokenLink BrokenLink
-	ok         bool
 }
 
 type resourceInfo struct {
 	statusCode int
 	sizeBytes  int64
 	error      string
+}
+
+type resourceCache struct {
+	mu    sync.Mutex
+	items map[string]resourceInfo
 }
 
 const defaultRetryDelay = time.Millisecond * 100
@@ -67,9 +73,9 @@ func Analyze(ctx context.Context, opts Options) ([]byte, error) {
 	generatedAt := reportTime(opts).Format(time.RFC3339)
 	maxDepth := normalizeDepth(opts.Depth)
 	limiter := newRequestLimiter(opts)
-	resourceCache := make(map[string]resourceInfo)
+	cache := newResourceCache()
 
-	queue := []crawlItem{
+	currentItems := []crawlItem{
 		{
 			url:   opts.URL,
 			depth: 0,
@@ -82,42 +88,149 @@ func Analyze(ctx context.Context, opts Options) ([]byte, error) {
 
 	pages := make([]PageReport, 0)
 
-	for len(queue) > 0 {
+	for len(currentItems) > 0 {
 		if ctx.Err() != nil {
 			break
 		}
 
-		item := queue[0]
-		queue = queue[1:]
+		layerResults := analyzePages(ctx, opts, limiter, generatedAt, cache, currentItems)
+		nextItems := make([]crawlItem, 0)
 
-		page, body := analyzePage(ctx, opts, limiter, item.url, item.depth, generatedAt, resourceCache)
-		pages = append(pages, page)
+		for _, result := range layerResults {
+			pages = append(pages, result.page)
 
-		if page.Status != PageStatusOK {
-			continue
-		}
-
-		nextDepth := item.depth + 1
-		if nextDepth >= maxDepth {
-			continue
-		}
-
-		for _, link := range extractInternalPageLinks(opts.URL, page.URL, body) {
-			key := pageKey(link)
-			if _, exists := seen[key]; exists {
+			if result.page.Status != PageStatusOK {
 				continue
 			}
 
-			seen[key] = struct{}{}
+			nextDepth := result.item.depth + 1
+			if nextDepth >= maxDepth {
+				continue
+			}
 
-			queue = append(queue, crawlItem{
-				url:   link,
-				depth: nextDepth,
-			})
+			for _, link := range extractInternalPageLinks(opts.URL, result.page.URL, result.body) {
+				key := pageKey(link)
+				if _, exists := seen[key]; exists {
+					continue
+				}
+
+				seen[key] = struct{}{}
+
+				nextItems = append(nextItems, crawlItem{
+					url:   link,
+					depth: nextDepth,
+				})
+			}
 		}
+
+		currentItems = nextItems
 	}
 
 	return buildReport(opts, maxDepth, pages, generatedAt)
+}
+
+func analyzePages(
+	ctx context.Context,
+	opts Options,
+	limiter *requestLimiter,
+	generatedAt string,
+	cache *resourceCache,
+	items []crawlItem,
+) []crawlPageResult {
+	if len(items) == 0 {
+		return nil
+	}
+
+	workers := normalizeConcurrency(opts.Concurrency)
+	if workers > len(items) {
+		workers = len(items)
+	}
+
+	jobs := make(chan crawlJob, len(items))
+	results := make(chan crawlPageResult, len(items))
+
+	var wg sync.WaitGroup
+
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			for job := range jobs {
+				page, body := analyzePage(
+					ctx,
+					opts,
+					limiter,
+					job.item.url,
+					job.item.depth,
+					generatedAt,
+					cache,
+				)
+
+				results <- crawlPageResult{
+					index: job.index,
+					item:  job.item,
+					page:  page,
+					body:  body,
+				}
+			}
+		}()
+	}
+
+	for index, item := range items {
+		jobs <- crawlJob{
+			index: index,
+			item:  item,
+		}
+	}
+	close(jobs)
+
+	wg.Wait()
+	close(results)
+
+	layerResults := make([]crawlPageResult, len(items))
+	for result := range results {
+		layerResults[result.index] = result
+	}
+
+	return layerResults
+}
+
+func newResourceCache() *resourceCache {
+	return &resourceCache{
+		items: make(map[string]resourceInfo),
+	}
+}
+
+func (cache *resourceCache) get(rawURL string) (resourceInfo, bool) {
+	if cache == nil {
+		return resourceInfo{}, false
+	}
+
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+
+	info, exists := cache.items[rawURL]
+
+	return info, exists
+}
+
+func (cache *resourceCache) set(rawURL string, info resourceInfo) resourceInfo {
+	if cache == nil {
+		return info
+	}
+
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+
+	if storedInfo, exists := cache.items[rawURL]; exists {
+		return storedInfo
+	}
+
+	cache.items[rawURL] = info
+
+	return info
 }
 
 func normalizeDepth(depth int) int {
@@ -175,7 +288,7 @@ func analyzePage(
 	pageURL string,
 	depth int,
 	discoveredAt string,
-	resourceCache map[string]resourceInfo,
+	cache *resourceCache,
 ) (PageReport, []byte) {
 	page := PageReport{
 		URL:          pageURL,
@@ -208,7 +321,7 @@ func analyzePage(
 
 	if rs.StatusCode >= http.StatusOK && rs.StatusCode < http.StatusBadRequest {
 		page.Status = PageStatusOK
-		page.Assets = findAssets(ctx, opts, limiter, page.URL, body, resourceCache)
+		page.Assets = findAssets(ctx, opts, limiter, page.URL, body, cache)
 		page.BrokenLinks = findBrokenLinks(ctx, opts, limiter, page.URL, body)
 	} else {
 		page.Status = PageStatusError
@@ -303,7 +416,8 @@ func shouldRetry(ctx context.Context, rs *http.Response, err error) bool {
 		return false
 	}
 
-	return rs.StatusCode == http.StatusTooManyRequests || rs.StatusCode >= http.StatusInternalServerError
+	return rs.StatusCode == http.StatusTooManyRequests ||
+		rs.StatusCode >= http.StatusInternalServerError
 }
 
 func retryDelay(opts Options) time.Duration {
@@ -366,69 +480,16 @@ func findBrokenLinks(
 	body []byte,
 ) []BrokenLink {
 	links := extractInternalPageLinks(opts.URL, pageURL, body)
-	if len(links) == 0 {
-		return []BrokenLink{}
-	}
-
-	workers := normalizeConcurrency(opts.Concurrency)
-	if workers > len(links) {
-		workers = len(links)
-	}
-
-	jobs := make(chan linkCheckJob)
-	results := make(chan brokenLinkResult, len(links))
-
-	var wg sync.WaitGroup
-
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-
-		go func() {
-			defer wg.Done()
-
-			for job := range jobs {
-				if ctx.Err() != nil {
-					continue
-				}
-
-				brokenLink, ok := checkBrokenLink(ctx, opts, limiter, job.url)
-				results <- brokenLinkResult{
-					index:      job.index,
-					brokenLink: brokenLink,
-					ok:         ok,
-				}
-			}
-		}()
-	}
-
-	go func() {
-		defer close(jobs)
-
-		for index, link := range links {
-			if ctx.Err() != nil {
-				return
-			}
-
-			select {
-			case <-ctx.Done():
-				return
-			case jobs <- linkCheckJob{index: index, url: link}:
-			}
-		}
-	}()
-
-	wg.Wait()
-	close(results)
-
-	checkedLinks := make([]brokenLinkResult, len(links))
-	for result := range results {
-		checkedLinks[result.index] = result
-	}
-
 	brokenLinks := make([]BrokenLink, 0)
-	for _, result := range checkedLinks {
-		if result.ok {
-			brokenLinks = append(brokenLinks, result.brokenLink)
+
+	for _, link := range links {
+		if ctx.Err() != nil {
+			break
+		}
+
+		brokenLink, ok := checkBrokenLink(ctx, opts, limiter, link)
+		if ok {
+			brokenLinks = append(brokenLinks, brokenLink)
 		}
 	}
 
@@ -441,7 +502,7 @@ func findAssets(
 	limiter *requestLimiter,
 	pageURL string,
 	body []byte,
-	resourceCache map[string]resourceInfo,
+	cache *resourceCache,
 ) []Asset {
 	candidates := extractAssets(pageURL, body)
 	assets := make([]Asset, 0, len(candidates))
@@ -451,7 +512,7 @@ func findAssets(
 			break
 		}
 
-		info := getResourceInfo(ctx, opts, limiter, candidate.url, resourceCache)
+		info := getResourceInfo(ctx, opts, limiter, candidate.url, cache)
 
 		assets = append(assets, Asset{
 			URL:        candidate.url,
@@ -557,16 +618,15 @@ func getResourceInfo(
 	opts Options,
 	limiter *requestLimiter,
 	rawURL string,
-	resourceCache map[string]resourceInfo,
+	cache *resourceCache,
 ) resourceInfo {
-	if info, exists := resourceCache[rawURL]; exists {
+	if info, exists := cache.get(rawURL); exists {
 		return info
 	}
 
 	info := fetchResourceInfo(ctx, opts, limiter, rawURL)
-	resourceCache[rawURL] = info
 
-	return info
+	return cache.set(rawURL, info)
 }
 
 func fetchResourceInfo(

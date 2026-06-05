@@ -9,51 +9,68 @@ import (
 	"time"
 )
 
-func TestAnalyze_ChecksLinksInParallelAccordingToConcurrency(t *testing.T) {
+// TestAnalyze_AnalyzesPagesInParallelAccordingToConcurrency проверяет, что
+// Concurrency применяется к анализу страниц, а не только к проверке ссылок.
+func TestAnalyze_AnalyzesPagesInParallelAccordingToConcurrency(t *testing.T) {
 	const (
-		mockedPageURL  = mockedBaseURL + "/index.html"
-		mockedLink1URL = mockedBaseURL + "/link-1"
-		mockedLink2URL = mockedBaseURL + "/link-2"
-		mockedLink3URL = mockedBaseURL + "/link-3"
+		mockedRootURL  = mockedBaseURL + "/index.html"
+		mockedPage1URL = mockedBaseURL + "/page-1.html"
+		mockedPage2URL = mockedBaseURL + "/page-2.html"
 	)
 
-	htmlBody := `
+	rootBody := `
 		<html>
 			<body>
-				<a href="/link-1">link 1</a>
-				<a href="/link-2">link 2</a>
-				<a href="/link-3">link 3</a>
+				<a href="/page-1.html">page 1</a>
+				<a href="/page-2.html">page 2</a>
+			</body>
+		</html>
+	`
+
+	pageBody := `
+		<html>
+			<body>
+				<p>page</p>
 			</body>
 		</html>
 	`
 
 	var requestsMu sync.Mutex
-	activeRequests := 0
-	maxActiveRequests := 0
+	requestsByURL := make(map[string]int)
+	activePageRequests := 0
+	maxActivePageRequests := 0
 
 	client := &http.Client{
 		Transport: roundTripFunc(func(rq *http.Request) (*http.Response, error) {
 			requestedURL := rq.URL.String()
 
 			switch requestedURL {
-			case mockedPageURL:
-				return newTestResponse(rq, http.StatusOK, "200 OK", htmlBody), nil
+			case mockedRootURL:
+				return newTestResponse(rq, http.StatusOK, "200 OK", rootBody), nil
 
-			case mockedLink1URL, mockedLink2URL, mockedLink3URL:
+			case mockedPage1URL, mockedPage2URL:
 				requestsMu.Lock()
-				activeRequests++
-				if activeRequests > maxActiveRequests {
-					maxActiveRequests = activeRequests
+				requestsByURL[requestedURL]++
+				requestNumber := requestsByURL[requestedURL]
+				isPageAnalysisRequest := requestNumber > 1
+
+				if isPageAnalysisRequest {
+					activePageRequests++
+					if activePageRequests > maxActivePageRequests {
+						maxActivePageRequests = activePageRequests
+					}
 				}
 				requestsMu.Unlock()
 
-				time.Sleep(50 * time.Millisecond)
+				if isPageAnalysisRequest {
+					time.Sleep(50 * time.Millisecond)
 
-				requestsMu.Lock()
-				activeRequests--
-				requestsMu.Unlock()
+					requestsMu.Lock()
+					activePageRequests--
+					requestsMu.Unlock()
+				}
 
-				return newTestResponse(rq, http.StatusOK, "200 OK", "ok"), nil
+				return newTestResponse(rq, http.StatusOK, "200 OK", pageBody), nil
 
 			default:
 				t.Fatalf("got unexpected request URL %q", requestedURL)
@@ -63,9 +80,9 @@ func TestAnalyze_ChecksLinksInParallelAccordingToConcurrency(t *testing.T) {
 	}
 
 	result, err := Analyze(context.Background(), Options{
-		URL:         mockedPageURL,
-		Depth:       1,
-		Concurrency: 3,
+		URL:         mockedRootURL,
+		Depth:       2,
+		Concurrency: 2,
 		HTTPClient:  client,
 	})
 	if err != nil {
@@ -79,26 +96,18 @@ func TestAnalyze_ChecksLinksInParallelAccordingToConcurrency(t *testing.T) {
 
 	{
 		got := len(report.Pages)
-		want := 1
+		want := 3
 		if got != want {
 			t.Fatalf("got pages len %d, want %d", got, want)
 		}
 	}
 
-	{
-		got := len(report.Pages[0].BrokenLinks)
-		want := 0
-		if got != want {
-			t.Fatalf("got broken links len %d, want %d", got, want)
-		}
-	}
-
 	requestsMu.Lock()
-	got := maxActiveRequests
+	got := maxActivePageRequests
 	requestsMu.Unlock()
 
 	want := 2
 	if got < want {
-		t.Fatalf("got max active requests %d, want at least %d", got, want)
+		t.Fatalf("got max active page requests %d, want at least %d", got, want)
 	}
 }
