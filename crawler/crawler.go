@@ -203,31 +203,24 @@ func newResourceCache() *resourceCache {
 	}
 }
 
-func (cache *resourceCache) get(rawURL string) (resourceInfo, bool) {
+func (cache *resourceCache) getOrFetch(
+	ctx context.Context,
+	opts Options,
+	limiter *requestLimiter,
+	rawURL string,
+) resourceInfo {
 	if cache == nil {
-		return resourceInfo{}, false
+		return fetchResourceInfo(ctx, opts, limiter, rawURL)
 	}
 
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 
-	info, exists := cache.items[rawURL]
-
-	return info, exists
-}
-
-func (cache *resourceCache) set(rawURL string, info resourceInfo) resourceInfo {
-	if cache == nil {
+	if info, exists := cache.items[rawURL]; exists {
 		return info
 	}
 
-	cache.mu.Lock()
-	defer cache.mu.Unlock()
-
-	if storedInfo, exists := cache.items[rawURL]; exists {
-		return storedInfo
-	}
-
+	info := fetchResourceInfo(ctx, opts, limiter, rawURL)
 	cache.items[rawURL] = info
 
 	return info
@@ -620,13 +613,7 @@ func getResourceInfo(
 	rawURL string,
 	cache *resourceCache,
 ) resourceInfo {
-	if info, exists := cache.get(rawURL); exists {
-		return info
-	}
-
-	info := fetchResourceInfo(ctx, opts, limiter, rawURL)
-
-	return cache.set(rawURL, info)
+	return cache.getOrFetch(ctx, opts, limiter, rawURL)
 }
 
 func fetchResourceInfo(

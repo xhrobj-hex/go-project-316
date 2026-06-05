@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sync"
 	"testing"
+	"time"
 )
 
 // TestAnalyze_ReportsAssetsFromHTMLPage проверяет, что crawler добавляет
@@ -477,6 +478,143 @@ func TestAnalyze_ReportsFaviconAsOtherAsset(t *testing.T) {
 		}
 		if got != want {
 			t.Fatalf("got asset %+v, want %+v", got, want)
+		}
+	}
+}
+
+// TestAnalyze_RequestsSameAssetOnceAcrossParallelPages проверяет, что общий
+// cache ассетов не допускает повторный запрос одного ассета при параллельном
+// анализе страниц одного слоя.
+func TestAnalyze_RequestsSameAssetOnceAcrossParallelPages(t *testing.T) {
+	const (
+		mockedRootURL  = mockedBaseURL + "/index.html"
+		mockedPage1URL = mockedBaseURL + "/page-1.html"
+		mockedPage2URL = mockedBaseURL + "/page-2.html"
+		mockedLogoURL  = mockedBaseURL + "/static/logo.png"
+	)
+
+	rootBody := `
+		<!doctype html>
+		<html>
+		<body>
+			<a href="/page-1.html">page 1</a>
+			<a href="/page-2.html">page 2</a>
+		</body>
+		</html>
+	`
+
+	pageBody := `
+		<!doctype html>
+		<html>
+		<body>
+			<img src="/static/logo.png">
+		</body>
+		</html>
+	`
+
+	logoBody := "logo"
+
+	requestCounts := make(map[string]int)
+	pageAnalysisRequests := 0
+	releasePageResponses := make(chan struct{})
+	var requestCountsMu sync.Mutex
+
+	client := &http.Client{
+		Transport: roundTripFunc(func(rq *http.Request) (*http.Response, error) {
+			requestedURL := rq.URL.String()
+
+			requestCountsMu.Lock()
+			requestCounts[requestedURL]++
+			requestCountsMu.Unlock()
+
+			switch requestedURL {
+			case mockedRootURL:
+				return newTestResponse(rq, http.StatusOK, "200 OK", rootBody), nil
+
+			case mockedPage1URL, mockedPage2URL:
+				if rq.Method == http.MethodHead {
+					return newTestResponse(rq, http.StatusOK, "200 OK", ""), nil
+				}
+
+				requestCountsMu.Lock()
+				pageAnalysisRequests++
+				if pageAnalysisRequests == 2 {
+					close(releasePageResponses)
+				}
+				requestCountsMu.Unlock()
+
+				select {
+				case <-releasePageResponses:
+				case <-time.After(time.Second):
+					return newTestResponse(rq, http.StatusInternalServerError, "500 Internal Server Error", ""), nil
+				}
+
+				return newTestResponse(rq, http.StatusOK, "200 OK", pageBody), nil
+
+			case mockedLogoURL:
+				time.Sleep(50 * time.Millisecond)
+
+				rs := newTestResponse(rq, http.StatusOK, "200 OK", logoBody)
+				rs.ContentLength = int64(len(logoBody))
+				return rs, nil
+
+			default:
+				t.Fatalf("got unexpected request URL %q", requestedURL)
+				return nil, nil
+			}
+		}),
+	}
+
+	result, err := Analyze(context.Background(), Options{
+		URL:         mockedRootURL,
+		Depth:       2,
+		Concurrency: 2,
+		HTTPClient:  client,
+	})
+	if err != nil {
+		t.Fatalf("got error %v, want nil", err)
+	}
+
+	var report Report
+	if err := json.Unmarshal(result, &report); err != nil {
+		t.Fatalf("got unmarshal error %v, want nil", err)
+	}
+
+	page1 := findPageByURL(t, report.Pages, mockedPage1URL)
+	page2 := findPageByURL(t, report.Pages, mockedPage2URL)
+
+	{
+		got := len(page1.Assets)
+		want := 1
+		if got != want {
+			t.Fatalf("got page 1 assets len %d, want %d", got, want)
+		}
+	}
+
+	{
+		got := len(page2.Assets)
+		want := 1
+		if got != want {
+			t.Fatalf("got page 2 assets len %d, want %d", got, want)
+		}
+	}
+
+	{
+		got := page1.Assets[0]
+		want := page2.Assets[0]
+		if got != want {
+			t.Fatalf("got page 2 asset %+v, want %+v", got, want)
+		}
+	}
+
+	{
+		requestCountsMu.Lock()
+		got := requestCounts[mockedLogoURL]
+		requestCountsMu.Unlock()
+
+		want := 1
+		if got != want {
+			t.Fatalf("got logo requests count %d, want %d", got, want)
 		}
 	}
 }
